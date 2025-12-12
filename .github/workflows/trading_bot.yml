@@ -1,0 +1,45 @@
+name: Phoenix Trading Bot 🦅
+
+on:
+  # 1. Programmation Automatique (CRON)
+  # Le bot démarre à 00:00, 06:00, 12:00 et 18:00 (UTC)
+  schedule:
+    - cron: '0 0,6,12,18 * * *'
+  
+  # 2. Démarrage Manuel (Bouton "Run workflow")
+  # Utile pour tester immédiatement sans attendre l'heure pile
+  workflow_dispatch:
+
+jobs:
+  run-phoenix:
+    name: Live Trading Session
+    runs-on: ubuntu-latest
+    # Sécurité : Si le bot plante et ne s'éteint pas tout seul,
+    # GitHub le tuera de force après 360 minutes (6h).
+    timeout-minutes: 360 
+
+    steps:
+    # A. Récupération du code
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # B. Installation de Python 3.10
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip' # Accélère l'installation des librairies
+
+    # C. Installation des dépendances
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # D. Lancement du Bot
+    - name: Run Phoenix Bot 🚀
+      env:
+        # C'est ici qu'on injecte tes clés sécurisées stockées dans GitHub Secrets
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      run: python main.py
