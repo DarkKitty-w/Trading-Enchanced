@@ -1,0 +1,13 @@
+pandas
+numpy
+ccxt
+supabase
+python-dotenv
+aiohttp
+requests
+scipy
+plotly
+seaborn
+matplotlib
+optuna
+streamlit
