@@ -7,6 +7,10 @@
         "api_timeout_seconds": 10,
         "timezone": "UTC"
     },
+    "portfolio": {
+        "initial_capital_per_strategy": 1000.0,
+        "currency": "USDT"
+    },
     "trading": {
         "pairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT"],
         "quote_currency": "USDT",
@@ -31,7 +35,14 @@
     },
     "strategies": {
         "active_strategy": "Volatility_Regime_Adaptive",
-        "active_strategies": ["Volatility_Regime_Adaptive"],
+        "active_strategies": [
+            "Volatility_Regime_Adaptive", 
+            "MeanReversion", 
+            "MA_Enhanced", 
+            "Momentum_Enhanced", 
+            "MeanReversion_Pro", 
+            "MA_Momentum_Hybrid"
+        ],
         "parameters": {
             "MeanReversion": {
                 "period": 20,
