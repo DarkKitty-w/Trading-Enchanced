@@ -3,7 +3,6 @@ import json
 import logging
 import os
 
-# Import du Backtester et des Stratégies
 from backtest import Backtester
 from strategies import (
     MeanReversion, 
@@ -14,7 +13,7 @@ from strategies import (
     Volatility_Regime_Adaptive
 )
 
-# --- Configuration logging ---
+# --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger("PhoenixOptimizer")
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -24,7 +23,6 @@ class PhoenixOptimizer:
         self.config_path = 'config.json'
 
     def _get_strategy_class(self, strategy_name):
-        """Mappe le nom de la stratégie à sa classe Python"""
         mapping = {
             "MeanReversion": MeanReversion,
             "MA_Enhanced": MA_Enhanced,
@@ -40,7 +38,6 @@ class PhoenixOptimizer:
             return json.load(f)
 
     def optimize_strategy(self, strat_name, n_trials=50):
-        """Optimisation pour une stratégie"""
         print(f"\n🧠 OPTIMISATION CIBLÉE : {strat_name}")
         print(f"   🎯 Objectif : Maximiser le SQN multi-coins")
 
@@ -50,17 +47,15 @@ class PhoenixOptimizer:
             return
 
         def objective(trial):
-            # Paramètres proposés par l'IA (Optuna)
             params = strat_class.get_optuna_params(trial)
 
-            # Forcer des bornes réalistes SL/TP
+            # Forcer SL/TP dans des bornes réalistes
             for k in params:
                 if "sl_pct" in k:
-                    params[k] = min(max(params[k], 0.001), 0.015)  # 0.1% - 1.5%
+                    params[k] = min(max(params[k], 0.001), 0.015)  # 0.1%-1.5%
                 if "tp_pct" in k:
-                    params[k] = min(max(params[k], 0.002), 0.03)  # 0.2% - 3%
+                    params[k] = min(max(params[k], 0.002), 0.03)   # 0.2%-3%
 
-            # Lancer le backtest sur tous les coins configurés
             bt = Backtester()
             coins = bt.config['trading']['pairs']
             total_score = 0
@@ -79,38 +74,27 @@ class PhoenixOptimizer:
                 ret = result.get('total_return', 0)
                 max_dd = result.get('max_drawdown', 0.0)
 
-                # Score SQN approximatif : régularité > chance
-                if max_dd < 0.0001:
-                    score = ret * 100
-                else:
-                    score = ret / max_dd
-
+                # Score basé sur SQN approximatif
+                score = ret * 100 if max_dd < 0.0001 else ret / max_dd
                 total_score += score
 
-            # Moyenne sur tous les coins
-            if len(coins) > 0:
-                return total_score / len(coins)
-            return total_score
+            return total_score / len(coins) if len(coins) > 0 else total_score
 
-        # Lancer l'étude Optuna
+        # Étude Optuna
         study = optuna.create_study(direction="maximize")
         try:
             study.optimize(objective, n_trials=n_trials)
             print(f"   🏆 MEILLEUR SCORE : {study.best_value:.4f}")
-            print(f"   ⚙️  PARAMÈTRES GAGNANTS :")
+            print("   ⚙️  PARAMÈTRES GAGNANTS :")
             for k, v in study.best_params.items():
                 print(f"       - {k}: {v}")
-
-            # Sauvegarde automatique
             self.save_params(strat_name, study.best_params)
-
         except KeyboardInterrupt:
             print("   🛑 Optimisation stoppée par l'utilisateur.")
         except Exception as e:
             print(f"   ❌ Erreur durant l'optimisation : {e}")
 
     def save_params(self, strat_name, new_params):
-        """Écrit les meilleurs paramètres directement dans config.json"""
         config = self.load_config()
         if strat_name not in config['strategies']['parameters']:
             config['strategies']['parameters'][strat_name] = {}
@@ -120,7 +104,6 @@ class PhoenixOptimizer:
         print("   💾 Configuration mise à jour avec succès.")
 
     def run_all(self, n_trials_per_strat=50):
-        """Boucle sur toutes les stratégies actives"""
         config = self.load_config()
         strategies = config['strategies']['active_strategies']
         print("="*60)
@@ -136,4 +119,4 @@ class PhoenixOptimizer:
 
 if __name__ == "__main__":
     optimizer = PhoenixOptimizer()
-    optimizer.run_all(n_trials_per_strat=100)  # ou moins si tu veux aller vite
+    optimizer.run_all(n_trials_per_strat=100)
