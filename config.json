@@ -12,17 +12,28 @@
         "currency": "USDT"
     },
     "trading": {
-        "pairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT"],
+        "pairs": [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "BNB/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "DOGE/USDT"
+        ],
         "quote_currency": "USDT",
         "timeframe": "1m",
         "max_open_positions": 5,
-        "blacklist_coins": ["USDC/USDT", "FDUSD/USDT"]
+        "blacklist_coins": [
+            "USDC/USDT",
+            "FDUSD/USDT"
+        ]
     },
     "risk_management": {
         "global_settings": {
             "risk_per_trade_pct": 0.02,
-            "max_portfolio_exposure_pct": 0.80,
-            "min_cash_pct": 0.10,
+            "max_portfolio_exposure_pct": 0.8,
+            "min_cash_pct": 0.1,
             "max_drawdown_stop_trading_pct": 0.15,
             "daily_loss_limit_pct": 0.05
         },
@@ -36,63 +47,63 @@
     "strategies": {
         "active_strategy": "Volatility_Regime_Adaptive",
         "active_strategies": [
-            "Volatility_Regime_Adaptive", 
-            "MeanReversion", 
-            "MA_Enhanced", 
-            "Momentum_Enhanced", 
-            "MeanReversion_Pro", 
+            "Volatility_Regime_Adaptive",
+            "MeanReversion",
+            "MA_Enhanced",
+            "Momentum_Enhanced",
+            "MeanReversion_Pro",
             "MA_Momentum_Hybrid"
         ],
         "parameters": {
             "MeanReversion": {
-                "period": 20,
-                "buy_threshold": 0.99,
-                "sell_threshold": 1.01,
-                "stop_loss_pct": 0.02,
-                "take_profit_pct": 0.03,
-                "min_volatility_filter": 0.002
+                "period": 212,
+                "buy_threshold": 0.9704862940759542,
+                "sell_threshold": 1.1625099010027247,
+                "stop_loss_pct": 0.036985657627578127,
+                "take_profit_pct": 0.21549390385914358,
+                "min_volatility_filter": 0.01197202094085511
             },
             "MA_Enhanced": {
-                "short_window": 9,
-                "long_window": 21,
-                "volatility_threshold": 0.005,
-                "stop_loss_pct": 0.025,
-                "take_profit_pct": 0.05,
+                "short_window": 23,
+                "long_window": 97,
+                "volatility_threshold": 0.016732183212708304,
+                "stop_loss_pct": 0.0844621030045861,
+                "take_profit_pct": 0.11706912491782782,
                 "trend_confirmation_candles": 3
             },
             "Momentum_Enhanced": {
-                "period": 14,
-                "threshold": 0.02,
-                "smoothing_window": 3,
-                "stop_loss_pct": 0.03,
-                "take_profit_pct": 0.08
+                "period": 77,
+                "threshold": 0.06945672885102137,
+                "smoothing_window": 1,
+                "stop_loss_pct": 0.038879866975562095,
+                "take_profit_pct": 0.1597593167199182
             },
             "MeanReversion_Pro": {
-                "period": 20,
-                "rsi_period": 14,
-                "rsi_oversold": 30,
-                "rsi_overbought": 70,
-                "buy_threshold": 0.98,
-                "sell_threshold": 1.02,
-                "stop_loss_pct": 0.02,
-                "take_profit_pct": 0.04
+                "period": 64,
+                "rsi_period": 37,
+                "rsi_oversold": 22,
+                "rsi_overbought": 73,
+                "buy_threshold": 0.9767303769215175,
+                "sell_threshold": 1.0420830320738823,
+                "stop_loss_pct": 0.1080964377611711,
+                "take_profit_pct": 0.28181011056725985
             },
             "MA_Momentum_Hybrid": {
-                "ma_short": 9,
-                "ma_long": 50,
-                "momentum_period": 10,
-                "momentum_threshold": 0.01,
-                "stop_loss_pct": 0.03,
-                "take_profit_pct": 0.06
+                "ma_short": 36,
+                "ma_long": 43,
+                "momentum_period": 63,
+                "momentum_threshold": 0.08039271301296189,
+                "stop_loss_pct": 0.07495786704961933,
+                "take_profit_pct": 0.0622279741368815
             },
             "Volatility_Regime_Adaptive": {
-                "lookback": 30,
-                "low_vol_period": 10,
-                "vol_threshold": 0.005,
-                "regime_low_sl_pct": 0.02,
-                "regime_low_tp_pct": 0.03,
-                "regime_high_sl_pct": 0.04,
-                "regime_high_tp_pct": 0.10
+                "lookback": 138,
+                "low_vol_period": 35,
+                "vol_threshold": 0.04569218983669063,
+                "regime_low_sl_pct": 0.032900880453793656,
+                "regime_low_tp_pct": 0.15647567384158648,
+                "regime_high_sl_pct": 0.2942416449085724,
+                "regime_high_tp_pct": 0.47302472088470676
             }
         }
     },
@@ -104,10 +115,22 @@
         "max_slippage_retry": 3,
         "force_market_orders": true,
         "precision": {
-            "BTC/USDT": {"price": 2, "amount": 5},
-            "ETH/USDT": {"price": 2, "amount": 4},
-            "SOL/USDT": {"price": 3, "amount": 2},
-            "default": {"price": 4, "amount": 4}
+            "BTC/USDT": {
+                "price": 2,
+                "amount": 5
+            },
+            "ETH/USDT": {
+                "price": 2,
+                "amount": 4
+            },
+            "SOL/USDT": {
+                "price": 3,
+                "amount": 2
+            },
+            "default": {
+                "price": 4,
+                "amount": 4
+            }
         }
     }
 }

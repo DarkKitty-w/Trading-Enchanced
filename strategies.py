@@ -62,15 +62,18 @@ class MeanReversion(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            # Paramètres Indicateurs
-            "period": trial.suggest_int("period", 10, 60),
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.95, 0.999),
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.001, 1.05),
-            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.001, 0.005),
+            # On passe la période max de 150 (ou 60) à 250
+            "period": trial.suggest_int("period", 5, 250), # MODIFICATION
+            
+            # Élargissement des seuils pour couvrir un retour à la moyenne plus large
+            "buy_threshold": trial.suggest_float("buy_threshold", 0.85, 0.999), # MODIFICATION
+            "sell_threshold": trial.suggest_float("sell_threshold", 1.001, 1.30), # MODIFICATION
+            
+            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0001, 0.05),
             
             # Paramètres Risque (Stop Loss / Take Profit)
-            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.01, 0.10),
-            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.02, 0.15)
+            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.005, 0.20),
+            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.01, 0.30)
         }
 
 # ==============================================================================
@@ -105,11 +108,11 @@ class MA_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "short_window": trial.suggest_int("short_window", 5, 20),
-            "long_window": trial.suggest_int("long_window", 21, 60),
-            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.001, 0.01),
-            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.01, 0.10),
-            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.02, 0.20)
+            "short_window": trial.suggest_int("short_window", 3, 60),
+            "long_window": trial.suggest_int("long_window", 20, 200),
+            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.0005, 0.05),
+            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.005, 0.25),
+            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.01, 0.40)
         }
 
 # ==============================================================================
@@ -147,11 +150,11 @@ class Momentum_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "period": trial.suggest_int("period", 5, 30),
-            "threshold": trial.suggest_float("threshold", 0.01, 0.05),
-            "smoothing_window": trial.suggest_int("smoothing_window", 1, 5),
-            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.02, 0.10),
-            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.05, 0.20)
+            "period": trial.suggest_int("period", 3, 90),
+            "threshold": trial.suggest_float("threshold", 0.005, 0.15),
+            "smoothing_window": trial.suggest_int("smoothing_window", 1, 20),
+            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.005, 0.25),
+            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.01, 0.40)
         }
 
 # ==============================================================================
@@ -191,14 +194,14 @@ class MeanReversion_Pro(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "period": trial.suggest_int("period", 10, 50),
-            "rsi_period": trial.suggest_int("rsi_period", 7, 21),
-            "rsi_oversold": trial.suggest_int("rsi_oversold", 20, 35),
-            "rsi_overbought": trial.suggest_int("rsi_overbought", 65, 80),
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.95, 0.99),
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.01, 1.05),
-            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.01, 0.05),
-            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.03, 0.10)
+            "period": trial.suggest_int("period", 10, 200),
+            "rsi_period": trial.suggest_int("rsi_period", 5, 60),
+            "rsi_oversold": trial.suggest_int("rsi_oversold", 5, 40),
+            "rsi_overbought": trial.suggest_int("rsi_overbought", 60, 95),
+            "buy_threshold": trial.suggest_float("buy_threshold", 0.90, 0.999),
+            "sell_threshold": trial.suggest_float("sell_threshold", 1.001, 1.30),
+            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.005, 0.15),
+            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.01, 0.30)
         }
 
 # ==============================================================================
@@ -233,12 +236,12 @@ class MA_Momentum_Hybrid(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "ma_short": trial.suggest_int("ma_short", 5, 20),
-            "ma_long": trial.suggest_int("ma_long", 21, 60),
-            "momentum_period": trial.suggest_int("momentum_period", 5, 20),
-            "momentum_threshold": trial.suggest_float("momentum_threshold", 0.005, 0.02),
-            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.02, 0.05),
-            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.05, 0.15)
+            "ma_short": trial.suggest_int("ma_short", 3, 80),
+            "ma_long": trial.suggest_int("ma_long", 20, 250),
+            "momentum_period": trial.suggest_int("momentum_period", 3, 80),
+            "momentum_threshold": trial.suggest_float("momentum_threshold", 0.002, 0.15),
+            "stop_loss_pct": trial.suggest_float("stop_loss_pct", 0.005, 0.20),
+            "take_profit_pct": trial.suggest_float("take_profit_pct", 0.01, 0.35)
         }
 
 # ==============================================================================
@@ -273,15 +276,15 @@ class Volatility_Regime_Adaptive(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "lookback": trial.suggest_int("lookback", 20, 60),
-            "low_vol_period": trial.suggest_int("low_vol_period", 5, 15),
-            "vol_threshold": trial.suggest_float("vol_threshold", 0.001, 0.01),
+            "lookback": trial.suggest_int("lookback", 20, 200),
+            "low_vol_period": trial.suggest_int("low_vol_period", 3, 50),
+            "vol_threshold": trial.suggest_float("vol_threshold", 0.0005, 0.05),
             
             # Paramètres de risque spécifiques aux régimes (si le backtester les gère)
-            "regime_low_sl_pct": trial.suggest_float("regime_low_sl_pct", 0.01, 0.03),
-            "regime_low_tp_pct": trial.suggest_float("regime_low_tp_pct", 0.02, 0.05),
-            "regime_high_sl_pct": trial.suggest_float("regime_high_sl_pct", 0.03, 0.07),
-            "regime_high_tp_pct": trial.suggest_float("regime_high_tp_pct", 0.08, 0.20)
+            "regime_low_sl_pct": trial.suggest_float("regime_low_sl_pct", 0.005, 0.20),
+            "regime_low_tp_pct": trial.suggest_float("regime_low_tp_pct", 0.01, 0.30),
+            "regime_high_sl_pct": trial.suggest_float("regime_high_sl_pct", 0.01, 0.30),
+            "regime_high_tp_pct": trial.suggest_float("regime_high_tp_pct", 0.05, 0.60)
         }
 
 # ==============================================================================

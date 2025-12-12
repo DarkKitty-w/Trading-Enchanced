@@ -4,13 +4,13 @@ import json
 import logging
 from typing import Dict, Any
 
-# Imports internes
+# Imports internes des modules Phoenix
 from execution import ExecutionManager
-from strategies import get_strategy, get_strategy_by_name
+from strategies import get_strategy_by_name
 from metrics import FinancialMetrics
 
-# Configuration
-logging.basicConfig(level=logging.INFO)
+# Configuration des logs (WARNING pour ne pas polluer l'affichage de l'optimisation)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger("PhoenixBacktest")
 
 class Backtester:
@@ -19,44 +19,40 @@ class Backtester:
         self.execution = ExecutionManager(self.config)
         
     def _load_config(self, path):
-        with open(path, 'r') as f:
-            return json.load(f)
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Erreur chargement config: {e}")
+            return {}
 
-    def fetch_historical_data(self, symbol: str, interval: str = '60', limit: int = 1000) -> pd.DataFrame:
+    def fetch_historical_data(self, symbol: str, interval: str = '1', limit: int = 10000) -> pd.DataFrame:
         """
-        Récupère l'historique via l'API Publique de BYBIT (No Login).
-        
-        Args:
-            symbol: Ex 'BTC/USDT'
-            interval: '1', '3', '5', '15', '30', '60' (minutes), 'D' (Day)
-                     Par défaut '60' (1h) pour le backtest.
+        Récupère l'historique via API BYBIT V5 (sans clé).
+        Corrigé pour utiliser category='linear' (USDT perp) + 10 000 candles.
         """
-        # Nettoyage symbole (BTC/USDT -> BTCUSDT)
+        # Nettoyage symbole (ex: BTC/USDT -> BTCUSDT)
         clean_symbol = symbol.replace('/', '').upper()
         
-        # API Bybit V5 (Market Kline)
         url = "https://api.bybit.com/v5/market/kline"
         params = {
-            "category": "spot",
+            "category": "linear",     # ⚠️ PERP USDT = linear
             "symbol": clean_symbol,
             "interval": interval,
-            "limit": limit
+            "limit": 10000            # ⚠️ 10 000 candles en une seule requête
         }
         
         try:
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
-            if data['retCode'] != 0:
-                logger.error(f"Erreur API Bybit: {data.get('retMsg')}")
+            if data.get('retCode') != 0:
+                logger.warning(f"Bybit API Error: {data.get('retMsg')}")
                 return pd.DataFrame()
-                
-            # Bybit renvoie une liste de listes :
-            # [startTime, open, high, low, close, volume, turnover]
-            raw_list = data['result']['list']
             
-            # Attention : Bybit renvoie du plus récent au plus ancien, il faut inverser
-            raw_list.reverse()
+            # Bybit renvoie : [startTime, open, high, low, close, volume, turnover]
+            raw_list = data['result']['list']
+            raw_list.reverse()  # mettre du plus ancien -> plus récent
             
             df = pd.DataFrame(raw_list, columns=[
                 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'
@@ -73,51 +69,69 @@ class Backtester:
             logger.error(f"Erreur Fetch Data ({symbol}): {e}")
             return pd.DataFrame()
 
-    def run_backtest(self, override_params: Dict = None, pair: str = None) -> Dict[str, Any]:
+    def run_backtest(self, strat_name: str, override_params: Dict = None, pair: str = None) -> Dict[str, Any]:
         """
-        Exécute la simulation.
+        Lance la simulation.
         """
         local_config = self.config.copy()
-        strat_name = local_config['strategies']['active_strategy']
         
+        # Injection paramètres optimisés
         if override_params:
+            if 'strategies' not in local_config: local_config['strategies'] = {}
+            if 'parameters' not in local_config['strategies']: local_config['strategies']['parameters'] = {}
+            
+            if strat_name not in local_config['strategies']['parameters']:
+                local_config['strategies']['parameters'][strat_name] = {}
+            
             local_config['strategies']['parameters'][strat_name].update(override_params)
             
-        strategy = get_strategy_by_name(strat_name, local_config)
+        # Charger stratégie
+        try:
+            strategy = get_strategy_by_name(strat_name, local_config)
+        except Exception as e:
+            logger.error(f"Impossible de charger la stratégie {strat_name}: {e}")
+            return {'sharpe_ratio': 0.0, 'total_return': 0.0, 'total_trades': 0}
         
+        # Paire
         if not pair:
             pair = local_config['trading']['pairs'][0]
             
-        # On utilise l'intervalle '60' (1 heure) pour le backtest
-        df = self.fetch_historical_data(pair, interval='60', limit=1000)
+        # HISTORIQUE = 10 000 candles
+        df = self.fetch_historical_data(pair, interval='1', limit=10000)
         
         if df.empty:
-            return {'sharpe_ratio': 0.0, 'total_return': 0.0, 'total_trades': 0}
+            return {'sharpe_ratio': 0.0, 'total_return': 0.0, 'total_trades': 0, 'max_drawdown': 0.0}
 
-        # --- MOTEUR DE SIMULATION ---
+        # Capacités de test
         portfolio = {"USDT": 1000.0}
         portfolio_history = []
         trades_log = []
+        
         start_index = 50 
         
         for i in range(start_index, len(df)):
             window = df.iloc[:i+1]
             current_bar = df.iloc[i]
-            current_price = current_bar['close']
+            price = current_bar['close']
+            
+            # Volatilité locale
             volatility = window['close'].pct_change().std()
             if pd.isna(volatility): volatility = 0.0
             
-            # Analyse
-            signal = strategy.analyze(window)
+            # Signal
+            try:
+                signal = strategy.analyze(window)
+            except Exception:
+                signal = "H HOLD"
             
-            # Exécution Achat
+            # BUY
             if signal == 'BUY':
                 usdt_balance = portfolio.get("USDT", 0)
                 if usdt_balance > 10:
-                    buy_price = self.execution.get_realistic_price(current_price, 'BUY', volatility)
+                    buy_price = self.execution.get_realistic_price(price, 'BUY', volatility)
                     size_usd = self.execution.calculate_dynamic_position_size(strategy.name, usdt_balance, volatility)
-                    qty = size_usd / buy_price
                     
+                    qty = size_usd / buy_price
                     cost = qty * buy_price
                     fees = self.execution.calculate_fees(cost)
                     
@@ -126,15 +140,17 @@ class Backtester:
                         portfolio[pair] = portfolio.get(pair, 0) + qty
                         
                         trades_log.append({
-                            'timestamp': current_bar['timestamp'],
-                            'side': 'BUY', 'price': buy_price, 'qty': qty, 'fee': fees, 'pnl': 0
+                            'side': 'BUY',
+                            'price': buy_price,
+                            'pnl': 0
                         })
 
-            # Exécution Vente
+            # SELL
             elif signal == 'SELL':
                 qty = portfolio.get(pair, 0)
                 if qty > 0.00001:
-                    sell_price = self.execution.get_realistic_price(current_price, 'SELL', volatility)
+                    sell_price = self.execution.get_realistic_price(price, 'SELL', volatility)
+                    
                     revenue = qty * sell_price
                     fees = self.execution.calculate_fees(revenue)
                     
@@ -142,18 +158,23 @@ class Backtester:
                     portfolio[pair] = 0
                     
                     trades_log.append({
-                        'timestamp': current_bar['timestamp'],
-                        'side': 'SELL', 'price': sell_price, 'qty': qty, 'fee': fees, 'pnl': 0
+                        'side': 'SELL',
+                        'price': sell_price,
+                        'pnl': 0
                     })
 
-            # Valorisation
-            val_crypto = portfolio.get(pair, 0) * current_price
+            # Valeur totale
+            val_crypto = portfolio.get(pair, 0) * price
             total_val = portfolio["USDT"] + val_crypto
             portfolio_history.append({'timestamp': current_bar['timestamp'], 'value': total_val})
 
-        return FinancialMetrics.get_comprehensive_stats(portfolio_history, trades_log)
+        # Stats
+        stats = FinancialMetrics.get_comprehensive_stats(portfolio_history, trades_log)
+        
+        return stats
 
 if __name__ == "__main__":
+    print("--- Test Rapide Backtest ---")
     bt = Backtester()
-    res = bt.run_backtest()
-    print(f"🏁 Résultat Backtest (Bybit Data): {res.get('total_return', 0)*100:.2f}%")
+    res = bt.run_backtest("MeanReversion")
+    print(f"Résultat Test: {res.get('total_return', 0)*100:.2f}% (Sharpe: {res.get('sharpe_ratio', 0):.2f})")

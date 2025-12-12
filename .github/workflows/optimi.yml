@@ -1,0 +1,46 @@
+name: Phoenix Optimization
+
+on:
+  workflow_dispatch:  # Permet de lancer manuellement depuis GitHub
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1️⃣ Checkout du code
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 2️⃣ Configurer Python
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    # 3️⃣ Installer dépendances
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install optuna
+
+    # 4️⃣ Lancer l'optimisation et rediriger les logs
+    - name: Run optimization
+      run: |
+        mkdir -p logs
+        python optimize.py 2>&1 | tee logs/optimization.log
+
+    # 5️⃣ Upload du config.json mis à jour comme artefact
+    - name: Upload updated config.json
+      uses: actions/upload-artifact@v4
+      with:
+        name: optimized-config
+        path: config.json
+
+    # 6️⃣ Upload du log complet comme artefact
+    - name: Upload optimization logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: optimization-logs
+        path: logs/optimization.log
