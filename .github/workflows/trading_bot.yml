@@ -43,3 +43,15 @@ jobs:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       run: python main.py
+
+    # E. Sauvegarde des Artefacts (Logs & Graphiques)
+    - name: Upload Session Artifacts 📂
+      if: always()  # S'exécute même si l'étape précédente échoue !
+      uses: actions/upload-artifact@v4
+      with:
+        name: phoenix-logs-and-charts
+        retention-days: 10  # Garde les fichiers pendant 10 jours
+        path: |
+          portfolio_logs_phoenix/charts/phoenix_interactive.html
+          portfolio_logs_phoenix/charts/phoenix_report.png
+          phoenix_bot.log
