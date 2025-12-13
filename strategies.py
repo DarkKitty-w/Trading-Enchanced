@@ -22,12 +22,22 @@ class Strategy(ABC):
         logger.debug(f"Initialisation {self.__class__.__name__} avec params: {self.params}")
 
     # --- FIX: Add this method to make it compatible with main.py ---
-    def generate_signals(self, data: pd.DataFrame, symbol: str = "") -> str:
+    def generate_signals(self, data: pd.DataFrame, symbol: str = "") -> Dict[str, Any]:
         """
         Alias pour main.py. 
-        Redirige l'appel generate_signals() vers analyze().
+        Redirige l'appel vers analyze() et CONVERTIT le résultat en dictionnaire.
         """
-        return self.analyze(data)
+        raw_signal = self.analyze(data) # Renvoie 'BUY', 'SELL' ou 'HOLD' (String)
+        
+        # Si le signal est valide, on le met dans un dictionnaire
+        if raw_signal in ["BUY", "SELL"]:
+            return {
+                "side": raw_signal,
+                "price": data['close'].iloc[-1] if not data.empty else 0
+            }
+            
+        # Sinon on renvoie None (pas de signal)
+        return None
     # ---------------------------------------------------------------
 
     @abstractmethod
