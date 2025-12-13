@@ -71,24 +71,27 @@ class PhoenixBot:
         # Initialisation du cash USDT si non présent
         self._initialize_portfolio()
 
-    def _initialize_portfolio(self):
-        """Initialise le portefeuille avec du cash USDT si vide"""
-        usdt_found = False
-        for asset in self.portfolio:
-            if asset['symbol'] == "USDT":
-                usdt_found = True
-                break
+        def _initialize_portfolio(self):
+        """Initialise le portefeuille avec du cash USDT séparé pour chaque stratégie"""
+        initial_capital = self.config.get("portfolio", {}).get("initial_capital_per_strategy", 1000.0)
         
-        if not usdt_found:
-            initial_capital = self.config.get("portfolio", {}).get("initial_capital_per_strategy", 1000.0)
-            self.portfolio.append({
-                "symbol": "USDT",
-                "strategy": "CASH",
-                "quantity": initial_capital,
-                "entry_price": 1.0,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })
-            logger.info(f"💰 Cash USDT initialisé: {initial_capital} USDT")
+        # Pour chaque stratégie active, créer un compte USDT séparé
+        for strategy_name in self.strategies.keys():
+            usdt_found = False
+            for asset in self.portfolio:
+                if asset['symbol'] == "USDT" and asset['strategy'] == strategy_name:
+                    usdt_found = True
+                    break
+            
+            if not usdt_found:
+                self.portfolio.append({
+                    "symbol": "USDT",
+                    "strategy": strategy_name,
+                    "quantity": initial_capital,
+                    "entry_price": 1.0,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                })
+                logger.info(f"💰 Cash USDT initialisé pour {strategy_name}: {initial_capital} USDT")
 
     async def fetch_market_data(self, symbol: str) -> pd.DataFrame:
         """Récupère les données via CoinLore (API Gratuite)"""
@@ -225,16 +228,16 @@ class PhoenixBot:
                 "updated_at": datetime.now(timezone.utc).isoformat()
             })
 
-        # 2. Mise à jour du Cash (USDT)
+        # 2. Mise à jour du Cash (USDT) - SPÉCIFIQUE À LA STRATÉGIE
         usdt_found = False
         for asset in new_portfolio:
-            if asset['symbol'] == "USDT":
+            if asset['symbol'] == "USDT" and asset['strategy'] == strategy_name:
                 usdt_found = True
                 if side == "BUY":
                     asset['quantity'] -= net_cost  # Déduit l'argent dépensé
                 elif side == "SELL":
                     asset['quantity'] += net_cost  # Ajoute l'argent gagné
-                
+
                 asset['updated_at'] = datetime.now(timezone.utc).isoformat()
                 break
         
