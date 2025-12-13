@@ -56,7 +56,7 @@ class PhoenixBot:
         self.db = DatabaseHandler()
         self.executor = ExecutionManager(self.config)  # Passer la configuration ici
         self.analytics = AdvancedChartGenerator()
-        self.strategies = get_active_strategies(self.config))
+        self.strategies = get_active_strategies(self.config)
         
         # Chargement de l'état
         self.portfolio = self.db.load_portfolio()
@@ -283,4 +283,5 @@ if __name__ == "__main__":
         asyncio.run(bot.run())
     except KeyboardInterrupt:
         bot.shutdown()
+
 
