@@ -1,751 +1,357 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from supabase import create_client
+import plotly.express as px
+from supabase import create_client, Client
 import os
-import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import numpy as np
-import altair as alt
 
-# Chargement env
-load_dotenv()
-
-# --- 1. CONFIGURATION PAGE & THEME ---
+# --- CONFIGURATION DE LA PAGE (DOIT ÊTRE LA PREMIÈRE COMMANDE) ---
 st.set_page_config(
-    page_title="PHOENIX COMMAND CENTER",
-    page_icon="🚀",
+    page_title="Phoenix Pro Terminal",
+    page_icon="🦅",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS MODERNE "COMMAND CENTER" ---
+# Chargement des variables d'environnement
+load_dotenv()
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+
+# Connexion Supabase sécurisée
+@st.cache_resource
+def init_connection():
+    if not url or not key:
+        st.error("Erreur: Identifiants Supabase manquants dans le fichier .env")
+        st.stop()
+    return create_client(url, key)
+
+supabase = init_connection()
+
+# --- CSS PROFESSIONNEL "DARK FINANCE" ---
 st.markdown("""
 <style>
-    /* Fond gradient professionnel */
+    /* Fond global */
     .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: #0e1117;
     }
     
-    /* Style moderne pour toutes les sections */
-    .main-header {
-        background: linear-gradient(90deg, rgba(30, 64, 175, 0.8) 0%, rgba(59, 130, 246, 0.8) 100%);
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin-bottom: 2rem;
-        border-left: 6px solid #f59e0b;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    }
-    
-    /* Cartes modernes avec effet glassmorphism */
-    .metric-card {
-        background: rgba(30, 41, 59, 0.8);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 1.5rem;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-    
-    .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3);
-    }
-    
-    /* KPIs avec dégradés */
-    .kpi-container {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-    }
-    
-    .kpi-label {
-        font-size: 13px;
-        text-transform: uppercase;
-        color: #94a3b8;
-        letter-spacing: 1.2px;
-        font-weight: 600;
-        margin-bottom: 0.5rem;
-    }
-    
-    .kpi-value {
-        font-size: 32px;
-        font-weight: 800;
-        background: linear-gradient(90deg, #f8fafc 0%, #cbd5e1 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        line-height: 1;
-    }
-    
-    .kpi-change {
-        font-size: 14px;
-        font-weight: 600;
-        margin-top: auto;
-        padding: 4px 12px;
-        border-radius: 20px;
-        display: inline-block;
-        width: fit-content;
-    }
-    
-    .positive {
-        background: rgba(34, 197, 94, 0.2);
-        color: #22c55e;
-        border: 1px solid rgba(34, 197, 94, 0.3);
-    }
-    
-    .negative {
-        background: rgba(239, 68, 68, 0.2);
-        color: #ef4444;
-        border: 1px solid rgba(239, 68, 68, 0.3);
-    }
-    
-    /* Tabs modernes */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(30, 41, 59, 0.5);
-        padding: 8px;
-        border-radius: 12px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 12px 24px;
-        background: transparent;
-        color: #94a3b8;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
-        color: white !important;
-    }
-    
-    /* Tableau moderne */
-    .dataframe {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border-radius: 12px;
-        overflow: hidden;
-    }
-    
-    .dataframe th {
-        background: rgba(30, 64, 175, 0.8) !important;
-        color: white !important;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Boutons modernes */
-    .stButton button {
-        background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
-        color: white;
-        border: none;
+    /* Style des conteneurs de métriques (Cartes) */
+    div[data-testid="stMetric"] {
+        background-color: #1a1c24;
+        border: 1px solid #2d303e;
+        padding: 15px;
         border-radius: 10px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     }
     
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 30px rgba(59, 130, 246, 0.4);
-    }
+    /* Couleurs des textes */
+    .css-10trblm { color: #e0e0e0; }
+    h1, h2, h3 { color: #ffffff; font-family: 'Roboto', sans-serif; }
     
-    /* Trade feed moderne */
-    .trade-feed-container {
-        background: rgba(15, 23, 42, 0.8);
-        border-radius: 16px;
-        padding: 1.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        height: 600px;
-        overflow-y: auto;
-    }
+    /* Style des tableaux */
+    .dataframe { font-size: 14px; }
     
-    .trade-item {
-        background: rgba(30, 41, 59, 0.6);
-        border-radius: 12px;
-        padding: 1rem;
-        margin-bottom: 0.75rem;
-        border-left: 4px solid;
-        transition: all 0.2s ease;
-    }
+    /* Suppression des marges inutiles de Streamlit */
+    .block-container { padding-top: 2rem; padding-bottom: 2rem; }
     
-    .trade-item:hover {
-        background: rgba(30, 41, 59, 0.9);
-        transform: translateX(5px);
-    }
-    
-    .trade-item.BUY {
-        border-left-color: #22c55e;
-        background: rgba(34, 197, 94, 0.1);
-    }
-    
-    .trade-item.SELL {
-        border-left-color: #ef4444;
-        background: rgba(239, 68, 68, 0.1);
-    }
-    
-    /* Chart containers */
-    .chart-container {
-        background: rgba(30, 41, 59, 0.8);
-        border-radius: 16px;
-        padding: 1.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    
-    /* Scrollbar personnalisée */
-    ::-webkit-scrollbar {
-        width: 8px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: rgba(30, 41, 59, 0.5);
-        border-radius: 4px;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(180deg, #3b82f6 0%, #1d4ed8 100%);
-        border-radius: 4px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 100%);
-    }
-    
-    /* Séparateurs */
-    .separator {
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent);
-        margin: 2rem 0;
-    }
-    
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 10px; background: #0e1117; }
+    ::-webkit-scrollbar-thumb { background: #2d303e; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. CONNEXIONS & DATA ---
-@st.cache_resource
-def init_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url: 
-        url = st.secrets["SUPABASE_URL"]
-    if not key: 
-        key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+# --- FONCTIONS DE RÉCUPÉRATION DE DONNÉES ---
 
-try:
-    supabase = init_supabase()
-except:
-    st.error("❌ Erreur de connexion à la base de données.")
-    st.stop()
-
-@st.cache_data(ttl=30)
-def get_crypto_prices():
-    """Récupère les prix des cryptos via CoinGecko"""
-    symbols = ["bitcoin", "ethereum", "solana", "binancecoin", "ripple", "cardano"]
-    prices = {"USDT": 1.0}
-    
+def get_current_portfolio():
+    """Récupère l'état ACTUEL du portefeuille"""
     try:
-        response = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": ",".join(symbols), "vs_currencies": "usd"}
-        )
-        data = response.json()
+        # On suppose qu'il y a une table 'portfolio_current' ou on prend le dernier snapshot
+        response = supabase.table('portfolio_state').select("*").execute()
+        data = response.data
+        if not data: return pd.DataFrame()
         
-        mapping = {
-            "bitcoin": "BTC",
-            "ethereum": "ETH", 
-            "solana": "SOL",
-            "binancecoin": "BNB",
-            "ripple": "XRP",
-            "cardano": "ADA"
-        }
-        
-        for coin, data_coin in data.items():
-            if coin in mapping:
-                symbol = mapping[coin]
-                prices[symbol] = data_coin["usd"]
-                prices[f"{symbol}/USDT"] = data_coin["usd"]
-                
+        # Astuce: si la table contient tout l'historique, on prend les entrées les plus récentes par actif
+        df = pd.DataFrame(data)
+        df['updated_at'] = pd.to_datetime(df['updated_at'])
+        # On garde uniquement la dernière ligne pour chaque crypto + stratégie
+        latest_portfolio = df.sort_values('updated_at').groupby(['symbol', 'strategy']).tail(1)
+        return latest_portfolio
     except Exception as e:
-        # Fallback aux prix fixes si l'API échoue
-        fallback = {
-            "BTC": 45000, "BTC/USDT": 45000,
-            "ETH": 2500, "ETH/USDT": 2500,
-            "SOL": 100, "SOL/USDT": 100,
-            "BNB": 300, "BNB/USDT": 300,
-            "XRP": 0.6, "XRP/USDT": 0.6,
-            "ADA": 0.5, "ADA/USDT": 0.5
-        }
-        prices.update(fallback)
-    
-    return prices
+        st.error(f"Erreur DB Portfolio: {e}")
+        return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-def get_all_data():
-    """Récupère et traite toutes les données"""
-    # Récupération des données brutes
+def get_trades_history(days_lookback=30):
+    """Récupère l'historique des trades pour la PnL Curve"""
     try:
-        port_data = supabase.table("portfolio_state").select("*").execute().data
-        trades_data = supabase.table("trades").select("*").order("timestamp", desc=True).limit(500).execute().data
+        date_cutoff = (datetime.now() - timedelta(days=days_lookback)).isoformat()
+        response = supabase.table('trades')\
+            .select("*")\
+            .gte('timestamp', date_cutoff)\
+            .order('timestamp', desc=False)\
+            .execute() # desc=False pour avoir l'ordre chronologique
+        data = response.data
+        if not data: return pd.DataFrame()
+        return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Erreur lors de la récupération des données: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
-    # Conversion en DataFrames
-    port = pd.DataFrame(port_data) if port_data else pd.DataFrame()
-    trades = pd.DataFrame(trades_data) if trades_data else pd.DataFrame()
-    
-    # Récupération des prix
-    unique_symbols = port['symbol'].unique().tolist() if not port.empty else []
-    prices = get_crypto_prices()
-    
-    # Traitement du portefeuille
-    leaderboard_data = []
-    portfolio_details = []
-    
-    if not port.empty:
-        # Calcul de la valeur actuelle
-        port['current_price'] = port['symbol'].apply(lambda x: prices.get(x, 0))
-        port['value_usd'] = port['quantity'] * port['current_price']
-        
-        # Grouper par stratégie
-        strategies = port['strategy'].unique()
-        
-        for strategy in strategies:
-            strat_port = port[port['strategy'] == strategy]
-            
-            # Calcul du NAV total
-            total_value = strat_port['value_usd'].sum()
-            cash_value = strat_port[strat_port['symbol'] == 'USDT']['value_usd'].sum() if not strat_port[strat_port['symbol'] == 'USDT'].empty else 0
-            
-            # Stats des trades
-            strat_trades = trades[trades['strategy'] == strategy] if not trades.empty else pd.DataFrame()
-            
-            total_pnl = 0
-            win_rate = 0
-            trade_count = len(strat_trades)
-            
-            if not strat_trades.empty:
-                strat_trades['pnl'] = pd.to_numeric(strat_trades['pnl'], errors='coerce').fillna(0)
-                total_pnl = strat_trades['pnl'].sum()
-                win_trades = (strat_trades['pnl'] > 0).sum()
-                win_rate = (win_trades / trade_count * 100) if trade_count > 0 else 0
-            
-            # Positions détaillées
-            crypto_positions = strat_port[strat_port['symbol'] != 'USDT']
-            for _, pos in crypto_positions.iterrows():
-                portfolio_details.append({
-                    'Stratégie': strategy,
-                    'Asset': pos['symbol'],
-                    'Quantité': pos['quantity'],
-                    'Prix Achat': pos.get('entry_price', 0),
-                    'Prix Actuel': pos['current_price'],
-                    'Valeur': pos['value_usd'],
-                    'PnL Unrealized': (pos['current_price'] - pos.get('entry_price', 0)) * pos['quantity'] if pos.get('entry_price', 0) > 0 else 0
-                })
-            
-            leaderboard_data.append({
-                "Stratégie": strategy,
-                "NAV Total ($)": total_value,
-                "Cash ($)": cash_value,
-                "PnL ($)": total_pnl,
-                "Win Rate (%)": win_rate,
-                "Trades": trade_count,
-                "Positions Actives": len(crypto_positions)
-            })
-    
-    # Création des DataFrames finaux
-    df_leaderboard = pd.DataFrame(leaderboard_data)
-    df_portfolio = pd.DataFrame(portfolio_details)
-    
-    if not df_leaderboard.empty:
-        df_leaderboard = df_leaderboard.sort_values("NAV Total ($)", ascending=False)
-        df_leaderboard['Rank'] = range(1, len(df_leaderboard) + 1)
-    
-    return df_leaderboard, trades, df_portfolio
+        st.error(f"Erreur DB Trades: {e}")
+        return pd.DataFrame()
 
-# --- 4. FONCTIONS DE VISUALISATION ---
-def create_performance_chart(df_leaderboard):
-    """Crée un graphique de performance radial"""
-    if df_leaderboard.empty:
-        return None
-    
-    fig = go.Figure()
-    
-    # Sélection des métriques pour le radar
-    metrics = ['NAV Total ($)', 'PnL ($)', 'Win Rate (%)', 'Trades']
-    
-    for _, row in df_leaderboard.iterrows():
-        values = [row[m] for m in metrics]
-        # Normalisation des valeurs
-        if max(values) > 0:
-            values_norm = [v / max(values) * 100 for v in values]
-        else:
-            values_norm = values
-        
-        fig.add_trace(go.Scatterpolar(
-            r=values_norm,
-            theta=metrics,
-            fill='toself',
-            name=row['Stratégie'],
-            line=dict(width=2),
-            opacity=0.7
-        ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100]
-            ),
-            bgcolor='rgba(30, 41, 59, 0.5)'
-        ),
-        showlegend=True,
-        height=400,
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-    
-    return fig
+# --- FONCTIONS DE CALCULS ---
 
-def create_distribution_chart(df_leaderboard):
-    """Crée un graphique de distribution du capital"""
-    if df_leaderboard.empty:
-        return None
-    
-    fig = px.sunburst(
-        df_leaderboard,
-        path=['Stratégie'],
-        values='NAV Total ($)',
-        color='PnL ($)',
-        color_continuous_scale=['#ef4444', '#f59e0b', '#22c55e'],
-        height=400
-    )
-    
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        margin=dict(t=0, b=0, l=0, r=0)
-    )
-    
-    return fig
-
-def create_pnl_timeline(trades_df):
-    """Crée une timeline des PnL"""
+def calculate_equity_curve(trades_df, initial_capital=1000):
+    """
+    Reconstruit la courbe de valeur totale du portefeuille basée sur les trades réalisés.
+    C'est la fameuse courbe que vous voulez.
+    """
     if trades_df.empty:
-        return None
+        # Retourne une ligne plate si pas de trades
+        return pd.DataFrame({'timestamp': [datetime.now()], 'total_equity': [initial_capital]})
+
+    df = trades_df.copy()
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp')
+
+    # On calcule le PnL réalisé (Realized PnL) pour chaque trade VENTE
+    # Note: Ceci est une simplification. Idéalement, il faudrait une table d'historique de snapshots.
+    df['trade_pnl'] = 0.0
+    # On suppose que le 'price' d'un SELL est le prix de sortie, et qu'on a besoin du prix d'entrée pour le PnL.
+    # Si votre DB trades a déjà une colonne 'pnl', utilisez-la directement.
+    # Sinon, une approximation est de tracker le cashflow :
     
-    trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
-    trades_df['date'] = trades_df['timestamp'].dt.date
-    trades_df['pnl'] = pd.to_numeric(trades_df['pnl'], errors='coerce').fillna(0)
+    running_capital = initial_capital
+    equity_history = []
+
+    # Ajout du point de départ
+    start_date = df['timestamp'].iloc[0] - timedelta(minutes=1)
+    equity_history.append({'timestamp': start_date, 'total_equity': initial_capital})
+
+    # Simulation simple de l'évolution du capital (cashflow)
+    for index, row in df.iterrows():
+        cost = row['price'] * row['quantity']
+        if row['side'] == 'BUY':
+            running_capital -= cost
+        elif row['side'] == 'SELL':
+            running_capital += cost
+        
+        equity_history.append({
+            'timestamp': row['timestamp'],
+            'total_equity': running_capital
+        })
+        
+    equity_df = pd.DataFrame(equity_history)
     
-    daily_pnl = trades_df.groupby(['date', 'strategy'])['pnl'].sum().reset_index()
+    # Lissage pour le graphique si plusieurs trades à la même seconde
+    equity_df = equity_df.groupby('timestamp')['total_equity'].last().reset_index()
+    return equity_df
+
+def color_pnl(val):
+    """Fonction pour colorer le PnL dans les tableaux Pandas"""
+    color = '#00ff7f' if val > 0 else '#ff4b4b' if val < 0 else '#e0e0e0'
+    return f'color: {color}; font-weight: bold;'
+
+# --- SIDEBAR (Filtres & Contrôles) ---
+with st.sidebar:
+    st.title("🦅 Contrôles Phoenix")
+    st.markdown("---")
     
+    # Filtre de temps pour les graphiques
+    time_range = st.selectbox(
+        "📅 Période d'analyse",
+        options=["7 Derniers Jours", "30 Derniers Jours", "Tout l'historique"],
+        index=1
+    )
+    
+    lookback_days = 30
+    if time_range == "7 Derniers Jours": lookback_days = 7
+    elif time_range == "Tout l'historique": lookback_days = 365 * 5 # Grand nombre
+
+    st.markdown("---")
+    if st.button("🔄 Rafraîchir les données", use_container_width=True):
+        # st.experimental_rerun() est obsolète, on utilise st.rerun()
+        st.rerun()
+        
+    st.caption(f"Dernière MàJ: {datetime.now().strftime('%H:%M:%S')}")
+
+# --- MAIN DASHBOARD ---
+
+st.title("📊 Phoenix Pro Terminal")
+st.markdown("---")
+
+# 1. CHARGEMENT DES DONNÉES
+portfolio_df = get_current_portfolio()
+trades_df = get_trades_history(lookback_days)
+
+# 2. CALCUL DES KIs (Key Performance Indicators)
+total_value_usdt = 1000.0 # Valeur par défaut (Capital de départ)
+total_pnl_abs = 0.0
+total_pnl_pct = 0.0
+active_positions_count = 0
+
+if not portfolio_df.empty:
+    # Isoler le cash USDT
+    usdt_row = portfolio_df[portfolio_df['symbol'] == 'USDT']
+    usdt_balance = usdt_row['quantity'].sum() if not usdt_row.empty else 0
+    
+    # Calculer la valeur des positions cryptos (Quantité * Prix d'entrée moyen)
+    # Note: Pour un vrai total, il faudrait le prix ACTUEL du marché, pas le prix d'entrée.
+    # On utilise le prix d'entrée comme approximation ici, ou on devrait fetcher les prix live.
+    crypto_positions = portfolio_df[portfolio_df['symbol'] != 'USDT'].copy()
+    crypto_value_at_entry = (crypto_positions['quantity'] * crypto_positions['entry_price']).sum()
+    active_positions_count = len(crypto_positions[crypto_positions['quantity'] > 0])
+
+    # Valeur Totale Estimée (Cash + Valeur d'achat des cryptos)
+    # ATTENTION: C'est une approximation si on n'a pas les prix live.
+    # Le mieux est d'utiliser la dernière valeur de la courbe d'équité si elle est fiable.
+    total_value_usdt = usdt_balance + crypto_value_at_entry
+    
+    # Si on a une courbe d'équité, utilisons sa dernière valeur qui est plus juste sur le cashflow
+    equity_curve = calculate_equity_curve(trades_df, initial_capital=1000)
+    if not equity_curve.empty:
+         total_value_usdt = equity_curve.iloc[-1]['total_equity']
+
+    initial_capital = 1000.0 # À configurer ou récupérer de la DB
+    total_pnl_abs = total_value_usdt - initial_capital
+    total_pnl_pct = (total_pnl_abs / initial_capital) * 100 if initial_capital > 0 else 0
+
+# 3. AFFICHAGE DES MÉTRIQUES (Top Row)
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        label="💰 Valeur Totale du Portefeuille",
+        value=f"${total_value_usdt:,.2f}",
+        delta=f"{total_pnl_abs:+.2f}$ (Global)",
+        delta_color="normal" # Le delta gère la couleur auto
+    )
+
+with col2:
+    st.metric(
+        label="📈 PnL Total (%)",
+        value=f"{total_pnl_pct:+.2f}%",
+        delta_color="normal" if total_pnl_pct >= 0 else "inverse"
+    )
+    
+with col3:
+    nb_trades = len(trades_df) if not trades_df.empty else 0
+    st.metric(label="🔄 Trades Exécutés (Période)", value=nb_trades)
+
+with col4:
+    st.metric(label="⚡ Positions Actives", value=active_positions_count)
+
+st.markdown("---")
+
+# 4. LA "MASTER CURVE" (Courbe d'Équité)
+st.subheader("📈 Évolution de la Valeur Totale (Equity Curve)")
+
+if not trades_df.empty:
+    equity_df = calculate_equity_curve(trades_df)
+    
+    # Création du graphique Area Chart professionnel
     fig = px.area(
-        daily_pnl,
-        x='date',
-        y='pnl',
-        color='strategy',
-        height=300,
-        title="PnL Cumulé par Jour"
+        equity_df, 
+        x='timestamp', 
+        y='total_equity',
+        template='plotly_dark',
+    )
+
+    # Customisation Poussée du Graphique
+    fig.update_traces(
+        line=dict(color='#00ff7f', width=3), # Ligne verte fluo
+        fillcolor='rgba(0, 255, 127, 0.1)'   # Remplissage vert transparent
     )
     
     fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
+        xaxis_title="",
+        yaxis_title="Valeur en USDT",
+        hovermode="x unified",
+        height=500,
+        margin=dict(l=20, r=20, t=30, b=20),
+        paper_bgcolor='rgba(0,0,0,0)', # Fond transparent pour s'intégrer au dashboard
         plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
+        xaxis=dict(
+            showgrid=False,
+            rangeslider=dict(visible=True), # Ajout du slider en bas
+            type="date"
         ),
-        hovermode='x unified'
+        yaxis=dict(
+            showgrid=True, 
+            gridcolor='#2d303e', # Grille subtile
+            tickprefix="$"
+        )
     )
-    
-    return fig
 
-# --- 5. UI PRINCIPALE ---
-def main():
-    # Header avec gradient
-    col1, col2, col3 = st.columns([3, 1, 1])
-    with col1:
-        st.markdown("""
-        <div class="main-header">
-            <h1 style="margin: 0; color: white; font-size: 2.5rem;">🚀 PHOENIX COMMAND CENTER</h1>
-            <p style="margin: 0.5rem 0 0 0; color: #cbd5e1; font-size: 1.1rem;">
-                Centre de contrôle multi-stratégies • Surveillance temps réel
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    # Ligne de référence du capital de départ
+    fig.add_hline(y=1000, line_dash="dash", line_color="gray", annotation_text="Capital Départ")
     
-    with col2:
-        if st.button("🔄 SYNC DATA", use_container_width=True):
-            st.rerun()
-    
-    with col3:
-        current_time = datetime.now().strftime("%H:%M:%S")
-        st.markdown(f"""
-        <div style="text-align: center; padding: 0.5rem; background: rgba(30, 64, 175, 0.3); border-radius: 10px;">
-            <div style="color: #94a3b8; font-size: 12px;">LAST UPDATE</div>
-            <div style="color: white; font-size: 18px; font-weight: bold;">{current_time}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Chargement des données
-    with st.spinner("🔄 Chargement des données en temps réel..."):
-        df_leaderboard, trades_df, portfolio_df = get_all_data()
-    
-    # Section 1: KPIs Principaux
-    if not df_leaderboard.empty:
-        st.markdown("### 📊 MÉTRIQUES GLOBALES")
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("En attente de trades pour générer la courbe de performance...")
+
+# 5. TABLEAU DES POSITIONS DÉTAILLÉ
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    st.subheader("📋 Positions Actuelles et Récentes")
+    if not portfolio_df.empty:
+        # Préparation du tableau
+        display_df = portfolio_df[portfolio_df['symbol'] != 'USDT'].copy()
         
-        kpi_cols = st.columns(5)
-        
-        total_aum = df_leaderboard['NAV Total ($)'].sum()
-        total_pnl = df_leaderboard['PnL ($)'].sum()
-        total_trades = df_leaderboard['Trades'].sum()
-        avg_win_rate = df_leaderboard['Win Rate (%)'].mean()
-        active_strats = len(df_leaderboard)
-        
-        kpis = [
-            ("TOTAL AUM", f"${total_aum:,.0f}", "+12.5%"),
-            ("PNL TOTAL", f"${total_pnl:+,.0f}", "+5.2%" if total_pnl > 0 else "-5.2%"),
-            ("TRADES", f"{total_trades:,}", None),
-            ("WIN RATE MOYEN", f"{avg_win_rate:.1f}%", None),
-            ("STRATÉGIES ACTIVES", f"{active_strats}", None)
-        ]
-        
-        for idx, (label, value, change) in enumerate(kpis):
-            with kpi_cols[idx]:
-                change_html = ""
-                if change:
-                    change_class = "positive" if "+" in change else "negative"
-                    change_html = f'<div class="kpi-change {change_class}">{change}</div>'
-                
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="kpi-container">
-                        <div class="kpi-label">{label}</div>
-                        <div class="kpi-value">{value}</div>
-                        {change_html}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="separator"></div>', unsafe_allow_html=True)
-    
-    # Section 2: Graphiques Principaux
-    st.markdown("### 📈 ANALYTICS EN TEMPS RÉEL")
-    
-    tab1, tab2, tab3 = st.tabs(["📊 Performance", "🌐 Distribution", "📅 Timeline PnL"])
-    
-    with tab1:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            fig = create_performance_chart(df_leaderboard)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Aucune donnée disponible pour le graphique de performance.")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            if not df_leaderboard.empty:
-                # Top 3 des stratégies
-                top_3 = df_leaderboard.head(3)
-                for _, row in top_3.iterrows():
-                    st.metric(
-                        label=row['Stratégie'],
-                        value=f"${row['NAV Total ($)']:,.0f}",
-                        delta=f"{row['PnL ($)']:+,.0f}"
-                    )
-                    st.progress(row['Win Rate (%)'] / 100 if row['Win Rate (%)'] > 0 else 0)
-            else:
-                st.info("Aucune stratégie active.")
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    with tab2:
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            fig = create_distribution_chart(df_leaderboard)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Aucune donnée disponible pour le graphique de distribution.")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            st.markdown("#### 🏆 TOP PERFORMERS")
-            if not df_leaderboard.empty:
-                for idx, (_, row) in enumerate(df_leaderboard.iterrows()):
-                    col_a, col_b = st.columns([1, 2])
-                    with col_a:
-                        st.markdown(f"**#{idx+1}**")
-                    with col_b:
-                        st.markdown(f"**{row['Stratégie']}**")
-                        st.markdown(f"`${row['NAV Total ($)']:,.0f}`")
-                    st.markdown("---")
-            else:
-                st.info("Aucun classement disponible.")
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    with tab3:
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        fig = create_pnl_timeline(trades_df)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Aucun trade disponible pour la timeline.")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="separator"></div>', unsafe_allow_html=True)
-    
-    # Section 3: Tableau de bord et feed
-    st.markdown("### 🎯 DÉTAILS DES OPÉRATIONS")
-    
-    col_left, col_right = st.columns([2, 1])
-    
-    with col_left:
-        st.markdown("#### 📋 TABLEAU DES STRATÉGIES")
-        if not df_leaderboard.empty:
-            # Formater le DataFrame pour l'affichage
-            display_df = df_leaderboard.copy()
-            display_df['NAV Total ($)'] = display_df['NAV Total ($)'].apply(lambda x: f"${x:,.2f}")
-            display_df['Cash ($)'] = display_df['Cash ($)'].apply(lambda x: f"${x:,.2f}")
-            display_df['PnL ($)'] = display_df['PnL ($)'].apply(lambda x: f"{x:+,.2f}$")
-            display_df['Win Rate (%)'] = display_df['Win Rate (%)'].apply(lambda x: f"{x:.1f}%")
+        if not display_df.empty:
+            # Calcul d'un PnL Latent approximatif (si on n'a pas les prix live)
+            # Ici, on affiche juste les colonnes importantes.
+            display_df = display_df[['updated_at', 'symbol', 'strategy', 'quantity', 'entry_price']]
             
+            # Renommage pour l'affichage
+            display_df.columns = ['Dernière MàJ', 'Crypto', 'Stratégie', 'Quantité', 'Prix Entrée Moy.']
+            
+            # Formatage des nombres
+            display_df['Prix Entrée Moy.'] = display_df['Prix Entrée Moy.'].map('${:,.4f}'.format)
+            display_df['Quantité'] = display_df['Quantité'].map('{:,.4f}'.format)
+
+            # Affichage du tableau stylisé
             st.dataframe(
-                display_df,
-                column_config={
-                    "Rank": st.column_config.NumberColumn("Rang", width="small"),
-                    "Stratégie": st.column_config.TextColumn("Stratégie", width="medium"),
-                    "NAV Total ($)": st.column_config.TextColumn("NAV"),
-                    "PnL ($)": st.column_config.TextColumn("PnL"),
-                },
-                hide_index=True,
-                use_container_width=True
+                display_df.sort_values('Dernière MàJ', ascending=False),
+                use_container_width=True,
+                height=300,
+                hide_index=True
             )
         else:
-            st.info("Aucune donnée de stratégie disponible.")
-    
-    with col_right:
-        st.markdown("#### ⚡ FEED DES TRADES")
-        st.markdown('<div class="trade-feed-container">', unsafe_allow_html=True)
-        
-        if not trades_df.empty:
-            # Limiter aux 20 derniers trades pour la lisibilité
-            recent_trades = trades_df.head(20)
-            
-            for _, trade in recent_trades.iterrows():
-                side = trade.get('side', 'N/A')
-                symbol = trade.get('symbol', 'N/A')
-                strategy = trade.get('strategy', 'N/A')
-                price = float(trade.get('price', 0))
-                quantity = float(trade.get('quantity', 0))
-                pnl = float(trade.get('pnl', 0))
-                
-                # Formatage du timestamp
-                timestamp = pd.to_datetime(trade.get('timestamp', datetime.now()))
-                time_str = timestamp.strftime('%H:%M:%S')
-                
-                # Couleur et icône selon le side
-                if side == "BUY":
-                    icon = "🟢"
-                    side_color = "#22c55e"
-                else:
-                    icon = "🔴"
-                    side_color = "#ef4444"
-                
-                # Couleur du PnL
-                pnl_color = "#22c55e" if pnl >= 0 else "#ef4444"
-                pnl_symbol = "+" if pnl >= 0 else ""
-                
-                st.markdown(f"""
-                <div class="trade-item {side}">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                        <div style="font-weight: 600; color: {side_color};">{icon} {side}</div>
-                        <div style="font-size: 12px; color: #94a3b8;">{time_str}</div>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <div style="font-weight: 600; color: white;">{symbol}</div>
-                        <div style="color: {pnl_color}; font-weight: 600;">{pnl_symbol}{pnl:.2f}$</div>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; font-size: 12px; color: #cbd5e1;">
-                        <div>{strategy}</div>
-                        <div>{quantity:.4f} @ {price:.2f}$</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="text-align: center; padding: 2rem; color: #94a3b8;">
-                <div style="font-size: 48px; margin-bottom: 1rem;">📊</div>
-                <div style="font-size: 14px;">En attente de trades...</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Section 4: Détails du portefeuille
-    st.markdown('<div class="separator"></div>', unsafe_allow_html=True)
-    
-    st.markdown("### 💼 POSITIONS ACTIVES")
-    
-    if not portfolio_df.empty:
-        # Afficher par stratégie
-        strategies = portfolio_df['Stratégie'].unique()
-        
-        for strategy in strategies:
-            st.markdown(f"#### {strategy}")
-            strat_positions = portfolio_df[portfolio_df['Stratégie'] == strategy]
-            
-            cols = st.columns(len(strat_positions) if len(strat_positions) <= 4 else 4)
-            
-            for idx, (_, position) in enumerate(strat_positions.iterrows()):
-                with cols[idx % len(cols)]:
-                    pnl = position['PnL Unrealized']
-                    pnl_color = "#22c55e" if pnl >= 0 else "#ef4444"
-                    
-                    st.markdown(f"""
-                    <div class="metric-card" style="padding: 1rem;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                            <div style="font-weight: 600; color: white;">{position['Asset']}</div>
-                            <div style="color: {pnl_color}; font-weight: 600;">{pnl:+,.2f}$</div>
-                        </div>
-                        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">
-                            Quantité: {position['Quantité']:.4f}
-                        </div>
-                        <div style="font-size: 12px; color: #94a3b8;">
-                            Valeur: ${position['Valeur']:,.2f}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+            st.info("Aucune position crypto active.")
     else:
-        st.info("Aucune position active dans le portefeuille.")
+        st.warning("Impossible de charger le portefeuille.")
 
-if __name__ == "__main__":
-    main()
+# 6. (Optionnel) Un petit camembert de répartition
+with col_right:
+    st.subheader("Exposition du Portefeuille")
+    if not portfolio_df.empty:
+        # Calcul simple de la répartition basée sur les coûts d'entrée
+        allocation_df = portfolio_df.copy()
+        allocation_df['value'] = allocation_df['quantity'] * allocation_df['entry_price']
+        # Pour USDT, la valeur est juste la quantité
+        allocation_df.loc[allocation_df['symbol'] == 'USDT', 'value'] = allocation_df.loc[allocation_df['symbol'] == 'USDT', 'quantity']
+        
+        # On ne garde que ce qui a une valeur positive
+        allocation_df = allocation_df[allocation_df['value'] > 0.01]
+
+        if not allocation_df.empty:
+            fig_pie = px.pie(
+                allocation_df, 
+                values='value', 
+                names='symbol',
+                template='plotly_dark',
+                hole=0.4 # Donut chart
+            )
+            fig_pie.update_traces(textinfo='percent+label')
+            fig_pie.update_layout(
+                margin=dict(l=20, r=20, t=0, b=20),
+                 paper_bgcolor='rgba(0,0,0,0)',
+                 showlegend=False
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+             st.info("Portefeuille vide.")
