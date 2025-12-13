@@ -56,7 +56,12 @@ class PhoenixBot:
         self.db = DatabaseHandler()
         self.executor = ExecutionManager(self.config)  # Passer la configuration ici
         self.analytics = AdvancedChartGenerator()
-        self.strategies = get_active_strategies(self.config)
+        strategies_list = get_active_strategies(self.config)
+        if isinstance(strategies_list, list):
+            # Creates a dict like: {'RSIStrategy': strategy_instance, ...}
+            self.strategies = {s.__class__.__name__: s for s in strategies_list}
+        else:
+            self.strategies = strategies_list
         
         # Chargement de l'état
         self.portfolio = self.db.load_portfolio()
