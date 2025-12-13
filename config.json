@@ -56,50 +56,60 @@
         ],
         "parameters": {
             "MeanReversion": {
-                "period": 29,
-                "buy_threshold": 0.9927821437884462,
-                "sell_threshold": 1.0745394244720836,
-                "stop_loss_pct": 0.012020838819909644,
-                "take_profit_pct": 0.02403950683025824,
-                "min_volatility_filter": 0.0015751320499779737
+                "period": 192,
+                "buy_threshold": 0.9707989456550127,
+                "sell_threshold": 1.0314819375581257,
+                "stop_loss_pct": 0.13288708319051934,
+                "take_profit_pct": 0.38386555608827333,
+                "min_volatility_filter": 5.299553566892434e-05
             },
             "MA_Enhanced": {
                 "short_window": 7,
                 "long_window": 21,
                 "volatility_threshold": 0.00022021350470890875,
-                "stop_loss_pct": 0.007910142818154303,
-                "take_profit_pct": 0.02019405438009899,
+                "stop_loss_pct": 0.027619205448749382,
+                "take_profit_pct": 0.03265260874559779,
                 "trend_confirmation_candles": 1,
-                "crossover_threshold": 0.004098979902882645
+                "crossover_threshold": 0.004098979902882645,
+                "ma_short": 22,
+                "ma_long": 192,
+                "rsi_period": 24,
+                "rsi_oversold": 33,
+                "rsi_overbought": 60
             },
             "Momentum_Enhanced": {
                 "period": 24,
                 "threshold": 0.09531785910894204,
                 "smoothing_window": 3,
-                "stop_loss_pct": 0.027619205448749382,
-                "take_profit_pct": 0.026844247528777843,
+                "stop_loss_pct": 0.027622702864153293,
+                "take_profit_pct": 0.07083786293111903,
                 "momentum_threshold_multiplier": 1.092797576724562,
-                "sell_threshold_multiplier": 1.2190609389379257
+                "sell_threshold_multiplier": 1.2190609389379257,
+                "momentum_period": 22,
+                "rsi_period": 29,
+                "rsi_oversold": 37,
+                "rsi_overbought": 76
             },
             "MeanReversion_Pro": {
-                "period": 36,
+                "period": 78,
                 "rsi_period": 29,
                 "rsi_oversold": 35,
                 "rsi_overbought": 75,
                 "buy_threshold": 0.9574888947412369,
                 "sell_threshold": 1.0172874629929478,
-                "stop_loss_pct": 0.074128226350469,
-                "take_profit_pct": 0.17993741867105092,
+                "stop_loss_pct": 0.11113912156265374,
+                "take_profit_pct": 0.24347680883684428,
                 "confirmation_threshold": 1.0871254182522991,
-                "min_volatility_filter": 0.01733690530092121
+                "min_volatility_filter": 0.007800932022121826,
+                "zscore_threshold": 2.9014286128198323
             },
             "MA_Momentum_Hybrid": {
-                "ma_short": 20,
-                "ma_long": 49,
-                "momentum_period": 27,
+                "ma_short": 22,
+                "ma_long": 192,
+                "momentum_period": 38,
                 "momentum_threshold": 0.012880521130859263,
-                "stop_loss_pct": 0.09529523556019656,
-                "take_profit_pct": 0.05792170771800634,
+                "stop_loss_pct": 0.09180548020857031,
+                "take_profit_pct": 0.07084726977255024,
                 "require_both_conditions": false,
                 "ma_weight": 0.4824279936868143
             },
@@ -107,16 +117,19 @@
                 "lookback": 42,
                 "low_vol_period": 29,
                 "vol_threshold": 0.01124791518535967,
-                "regime_low_sl_pct": 0.029782540222861597,
-                "regime_low_tp_pct": 0.011440914600706172,
-                "regime_high_sl_pct": 0.05849549260809971,
-                "regime_high_tp_pct": 0.10324426408004217,
+                "regime_low_sl_pct": 0.06187255599871847,
+                "regime_low_tp_pct": 0.039643541684062936,
+                "regime_high_sl_pct": 0.03183923284706837,
+                "regime_high_tp_pct": 0.03626341140709585,
                 "low_regime_multiplier": 1.0394633936788147,
                 "high_regime_multiplier": 0.8624074561769747,
                 "regime_low_entry_pct": 0.008899863008405066,
                 "regime_low_exit_pct": 0.009858675589382382,
                 "regime_high_entry_pct": 0.03571763666479792,
-                "regime_high_exit_pct": 0.034044600469728355
+                "regime_high_exit_pct": 0.034044600469728355,
+                "regime_period": 44,
+                "regime_low_threshold": 0.9655000144869412,
+                "regime_high_threshold": 2.46398788362281
             }
         }
     },
