@@ -67,15 +67,15 @@
                 "short_window": 7,
                 "long_window": 21,
                 "volatility_threshold": 0.00022021350470890875,
-                "stop_loss_pct": 0.027619205448749382,
-                "take_profit_pct": 0.03265260874559779,
+                "stop_loss_pct": 0.14995603489005488,
+                "take_profit_pct": 0.14643693418360346,
                 "trend_confirmation_candles": 1,
                 "crossover_threshold": 0.004098979902882645,
-                "ma_short": 22,
-                "ma_long": 192,
-                "rsi_period": 24,
-                "rsi_oversold": 33,
-                "rsi_overbought": 60
+                "ma_short": 24,
+                "ma_long": 142,
+                "rsi_period": 10,
+                "rsi_oversold": 21,
+                "rsi_overbought": 71
             },
             "Momentum_Enhanced": {
                 "period": 24,
