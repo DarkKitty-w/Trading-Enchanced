@@ -72,6 +72,29 @@ class FinancialMetrics:
             return 0.0
 
     @staticmethod
+    def calculate_total_value(portfolio: List[Dict], strategies: Dict = None) -> float:
+        """
+        Calcule la valeur totale estimée des positions en cours.
+        Utilisé par main.py pour le suivi de performance.
+        """
+        total_value = 0.0
+        
+        if not portfolio:
+            return 0.0
+
+        for position in portfolio:
+            # Récupération sécurisée de la quantité et du prix
+            qty = float(position.get('quantity', 0.0))
+            
+            # On essaie de prendre le 'current_price' (prix actuel) s'il a été mis à jour,
+            # sinon on se rabat sur 'entry_price' ou 'price'
+            price = float(position.get('current_price', position.get('entry_price', position.get('price', 0.0))))
+            
+            total_value += qty * price
+            
+        return total_value
+
+    @staticmethod
     def calculate_max_drawdown(values: List[float]) -> float:
         """
         Calcule la perte maximale historique (Max Drawdown) depuis un sommet.
