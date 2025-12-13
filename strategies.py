@@ -21,6 +21,15 @@ class Strategy(ABC):
         self.params = config['strategies']['parameters'].get(self.__class__.__name__, {})
         logger.debug(f"Initialisation {self.__class__.__name__} avec params: {self.params}")
 
+    # --- FIX: Add this method to make it compatible with main.py ---
+    def generate_signals(self, data: pd.DataFrame, symbol: str = "") -> str:
+        """
+        Alias pour main.py. 
+        Redirige l'appel generate_signals() vers analyze().
+        """
+        return self.analyze(data)
+    # ---------------------------------------------------------------
+
     @abstractmethod
     def analyze(self, data: pd.DataFrame) -> str:
         """Logique de trading principale. Doit retourner 'BUY', 'SELL', ou 'HOLD'."""
@@ -82,7 +91,6 @@ class Strategy(ABC):
         Par exemple : TP > SL, buy_threshold < sell_threshold, etc.
         """
         return params  # À surcharger par les classes filles
-
 # ==============================================================================
 # 1. MEAN REVERSION (Retour à la moyenne) - CORRIGÉ
 # ==============================================================================
