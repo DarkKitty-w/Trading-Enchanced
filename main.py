@@ -207,7 +207,7 @@ class PhoenixBot:
         
         return new_portfolio
 
-    async def run(self, duration_minutes=60):
+    async def run(self, duration_minutes=350):
         """Lance le bot pour une durée déterminée"""
         end_time = time.time() + (duration_minutes * 60)
         max_min = duration_minutes
@@ -247,5 +247,8 @@ class PhoenixBot:
 
 if __name__ == "__main__":
     bot = PhoenixBot()
-    # Lancement asynchrone
-    asyncio.run(bot.run(duration_minutes=5)) # Test rapide 5 min
+    try:
+        asyncio.run(bot.run_async())
+    except KeyboardInterrupt:
+        pass
+
