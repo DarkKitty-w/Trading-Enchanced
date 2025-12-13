@@ -8,8 +8,8 @@ from supabase import create_client, Client
 class DatabaseHandler:
     def __init__(self):
         """
-        Gestionnaire de base de données Supabase.
-        Supporte l'architecture multi-stratégies (Hedge Fund).
+        Supabase Database Handler.
+        Updated to match PhoenixBot's main.py data structures (Lists).
         """
         self.logger = logging.getLogger("PhoenixDB")
         
@@ -20,130 +20,103 @@ class DatabaseHandler:
         self._connect()
 
     def _connect(self):
-        """Connexion robuste avec gestion d'erreur."""
+        """Robust connection with error handling."""
         if not self.url or not self.key:
-            self.logger.warning("⚠️ Credentials Supabase manquants. Mode 'VOLATILE' (Pas de sauvegarde).")
+            self.logger.warning("⚠️ Supabase credentials missing. Running in 'VOLATILE' mode (No Save).")
             return
 
         try:
             self.client = create_client(self.url, self.key)
-            # Test de connexion (Ping léger)
+            # Lightweight ping test
             self.client.table("portfolio_state").select("symbol").limit(1).execute()
-            self.logger.info("✅ Connexion Supabase établie.")
+            self.logger.info("✅ Supabase connection established.")
         except Exception as e:
-            self.logger.error(f"❌ Échec connexion Supabase: {e}")
+            self.logger.error(f"❌ Supabase connection failed: {e}")
             self.client = None
 
     def get_client(self) -> Optional[Client]:
         return self.client
 
-    def load_portfolio(self) -> Dict[str, Dict[str, float]]:
+    # --- PORTFOLIO METHODS ---
+
+    def load_portfolio(self) -> List[Dict[str, Any]]:
         """
-        Charge le portefeuille complet et le structure par stratégie.
-        
-        Retourne un dictionnaire de dictionnaires :
-        {
-            'GLOBAL': {'USDT': 1000.0},
-            'RSI_Strategy': {'BTC/USDT': 0.5, 'ETH/USDT': 1.2},
-            'Trend_Strategy': {'BTC/USDT': 0.1}
-        }
+        Loads the current portfolio state.
+        Returns a LIST of dictionaries to match main.py expectations.
         """
         if not self.client:
-            return {}
+            return []
 
         try:
-            # On récupère TOUTES les lignes
             response = self.client.table("portfolio_state").select("*").execute()
             data = response.data
             
-            portfolio = {}
-            
             if data:
-                for row in data:
-                    strat = row['strategy']
-                    sym = row['symbol']
-                    qty = float(row['quantity'])
-                    
-                    # Initialisation de la sous-dict si elle n'existe pas
-                    if strat not in portfolio:
-                        portfolio[strat] = {}
-                    
-                    portfolio[strat][sym] = qty
-            
-            self.logger.info(f"📥 Portefeuille chargé : {len(data)} positions réparties sur {len(portfolio)} comptes.")
-            return portfolio
+                self.logger.info(f"📥 Portfolio loaded: {len(data)} positions.")
+                return data # Returns list directly [symbol, strategy, quantity...]
+            return []
             
         except Exception as e:
-            self.logger.error(f"❌ Erreur Load Portfolio: {e}")
-            return {}
+            self.logger.error(f"❌ Error Loading Portfolio: {e}")
+            return []
 
-    def save_portfolio(self, portfolio: Dict[str, Dict[str, float]], entry_prices: Dict = None):
+    def save_portfolio(self, portfolio: List[Dict[str, Any]]):
         """
-        Sauvegarde l'état complet du portefeuille (Mode Hedge Fund).
-        Aplatit le dictionnaire imbriqué pour l'envoyer en SQL.
+        Saves the portfolio list to Supabase (Upsert).
         """
-        if not self.client:
+        if not self.client or not portfolio:
             return
 
         try:
-            data_to_upsert = []
-            
-            # On parcourt chaque stratégie
-            for strat_name, assets in portfolio.items():
-                # On parcourt chaque actif de la stratégie
-                for symbol, qty in assets.items():
-                    
-                    # Filtre anti-poussière (sauf pour USDT)
-                    if qty > 1e-6 or symbol == "USDT":
-                        record = {
-                            "symbol": symbol,
-                            "strategy": strat_name,
-                            "quantity": qty,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }
-                        
-                        # Gestion future des prix d'entrée (Optionnel pour l'instant)
-                        if entry_prices and strat_name in entry_prices and symbol in entry_prices[strat_name]:
-                             record["entry_price"] = entry_prices[strat_name][symbol]
-                        
-                        data_to_upsert.append(record)
-
-            if data_to_upsert:
-                # Upsert massif (Insert ou Update si le couple symbol+strategy existe déjà)
-                self.client.table("portfolio_state").upsert(data_to_upsert).execute()
-                # self.logger.debug(f"💾 Sauvegarde Cloud OK ({len(data_to_upsert)} lignes).")
-                
+            # Upsert the list directly. 
+            # Ensure your Supabase table has a composite primary key (symbol, strategy)
+            self.client.table("portfolio_state").upsert(portfolio).execute()
         except Exception as e:
-            self.logger.error(f"❌ Erreur Save Portfolio: {e}")
+            self.logger.error(f"❌ Error Saving Portfolio: {e}")
 
-    def log_trade(self, trade_data: Dict[str, Any]):
-        """Enregistre un trade dans l'historique."""
-        if not self.client: return
+    # --- HISTORY METHODS (Added to fix your error) ---
+
+    def load_portfolio_history(self) -> List[Dict[str, Any]]:
+        """Loads historical portfolio snapshots."""
+        if not self.client: return []
+        try:
+            # Assumes table 'portfolio_history' exists
+            response = self.client.table("portfolio_history").select("*").order("timestamp", desc=False).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            self.logger.error(f"⚠️ Could not load portfolio history: {e}")
+            return []
+
+    def load_trades_history(self) -> List[Dict[str, Any]]:
+        """Loads historical trades."""
+        if not self.client: return []
+        try:
+            response = self.client.table("trades").select("*").order("timestamp", desc=False).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            self.logger.error(f"⚠️ Could not load trades history: {e}")
+            return []
+
+    # --- TRADE METHODS ---
+
+    def save_trades(self, trades_list: List[Dict[str, Any]]):
+        """
+        Saves a list of trades. 
+        Used by main.py: self.db.save_trades(self.trades_history)
+        """
+        if not self.client or not trades_list:
+            return
 
         try:
-            # Gestion format date
-            ts = trade_data.get("timestamp")
-            ts_iso = ts.isoformat() if isinstance(ts, datetime) else str(ts)
-
-            formatted_trade = {
-                "timestamp": ts_iso,
-                "symbol": str(trade_data.get("symbol")),
-                "side": str(trade_data.get("side")),
-                "price": float(trade_data.get("price", 0.0)),
-                "quantity": float(trade_data.get("quantity", 0.0)),
-                "fee": float(trade_data.get("fee", 0.0)),
-                "strategy": str(trade_data.get("strategy", "Unknown")),
-                "pnl": float(trade_data.get("pnl", 0.0))
-            }
-            
-            self.client.table("trades").insert(formatted_trade).execute()
-            self.logger.info(f"📝 Trade archivé : {formatted_trade['side']} {formatted_trade['symbol']} ({formatted_trade['strategy']})")
-            
+            # We take the last trade to avoid re-upserting the whole history every cycle
+            # Or use upsert if you have a unique ID per trade.
+            # Here we try to upsert the whole list (efficient for small lists, safer for data integrity)
+            self.client.table("trades").upsert(trades_list).execute()
         except Exception as e:
-            self.logger.error(f"❌ Erreur Log Trade: {e}")
+            self.logger.error(f"❌ Error Saving Trades: {e}")
 
     def log_system_event(self, level: str, message: str, details: Dict = None):
-        """Log système pour debug."""
+        """System logging."""
         if not self.client: return
 
         try:
@@ -155,13 +128,11 @@ class DatabaseHandler:
             }
             self.client.table("system_logs").insert(payload).execute()
         except Exception:
-            pass # On ignore les erreurs de log système pour ne pas boucler
+            pass 
 
 if __name__ == "__main__":
-    # Test Unitaire
     db = DatabaseHandler()
     if db.client:
-        print("✅ Test Connexion OK")
-        # Test Load
+        print("✅ Connection Test OK")
         pf = db.load_portfolio()
-        print(f"📦 Contenu actuel : {pf}")
+        print(f"📦 Current Portfolio (List): {pf}")
