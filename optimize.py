@@ -42,7 +42,7 @@ class Color:
     UNDERLINE = '\033[4m'
     GRAY = '\033[90m'
     LIGHTGRAY = '\033[37m'
-    WHITE = '\033[97m'  # AJOUTÉ: Couleur WHITE manquante
+    WHITE = '\033[97m'
     RESET = '\033[0m'
 
 class TerminalDisplay:
@@ -167,7 +167,6 @@ class TerminalDisplay:
             else:
                 value_str = str(value)
             
-            # CORRIGÉ: Remplacement de Color.WHITE par Color.LIGHTGRAY
             key_display = f"{Color.LIGHTGRAY}{key}{Color.RESET}"
             val_display = f"{Color.YELLOW}{value_str}{Color.RESET}"
             
@@ -204,15 +203,71 @@ class TerminalDisplay:
         return user_input
 
 # ==============================================================================
+# ESPACE DE RECHERCHE DES STRATÉGIES
+# ==============================================================================
+
+STRATEGY_SEARCH_SPACE = {
+    "MeanReversion": {
+        "period": {"type": "int", "low": 5, "high": 200},
+        "buy_threshold": {"type": "float", "low": 0.85, "high": 0.99},
+        "sell_threshold": {"type": "float", "low": 1.01, "high": 1.20},
+        "stop_loss_pct": {"type": "float", "low": 0.005, "high": 0.15},
+        "take_profit_pct": {"type": "float", "low": 0.01, "high": 0.40},
+        "min_volatility_filter": {"type": "float", "low": 0.0, "high": 0.05}
+    },
+    "MA_Enhanced": {
+        "ma_short": {"type": "int", "low": 5, "high": 50},
+        "ma_long": {"type": "int", "low": 20, "high": 200},
+        "rsi_period": {"type": "int", "low": 5, "high": 30},
+        "rsi_oversold": {"type": "int", "low": 15, "high": 45},
+        "rsi_overbought": {"type": "int", "low": 55, "high": 90},
+        "stop_loss_pct": {"type": "float", "low": 0.005, "high": 0.15},
+        "take_profit_pct": {"type": "float", "low": 0.01, "high": 0.40}
+    },
+    "Momentum_Enhanced": {
+        "momentum_period": {"type": "int", "low": 5, "high": 50},
+        "rsi_period": {"type": "int", "low": 5, "high": 30},
+        "rsi_oversold": {"type": "int", "low": 15, "high": 45},
+        "rsi_overbought": {"type": "int", "low": 55, "high": 90},
+        "stop_loss_pct": {"type": "float", "low": 0.005, "high": 0.15},
+        "take_profit_pct": {"type": "float", "low": 0.01, "high": 0.40}
+    },
+    "MeanReversion_Pro": {
+        "period": {"type": "int", "low": 5, "high": 200},
+        "zscore_threshold": {"type": "float", "low": 1.0, "high": 3.0},
+        "stop_loss_pct": {"type": "float", "low": 0.005, "high": 0.15},
+        "take_profit_pct": {"type": "float", "low": 0.01, "high": 0.40},
+        "min_volatility_filter": {"type": "float", "low": 0.0, "high": 0.05}
+    },
+    "MA_Momentum_Hybrid": {
+        "ma_short": {"type": "int", "low": 5, "high": 50},
+        "ma_long": {"type": "int", "low": 20, "high": 200},
+        "momentum_period": {"type": "int", "low": 5, "high": 50},
+        "stop_loss_pct": {"type": "float", "low": 0.005, "high": 0.15},
+        "take_profit_pct": {"type": "float", "low": 0.01, "high": 0.40}
+    },
+    "Volatility_Regime_Adaptive": {
+        "regime_period": {"type": "int", "low": 10, "high": 100},
+        "regime_low_threshold": {"type": "float", "low": 0.3, "high": 1.0},
+        "regime_high_threshold": {"type": "float", "low": 1.0, "high": 3.0},
+        "regime_low_sl_pct": {"type": "float", "low": 0.005, "high": 0.10},
+        "regime_low_tp_pct": {"type": "float", "low": 0.01, "high": 0.20},
+        "regime_high_sl_pct": {"type": "float", "low": 0.01, "high": 0.15},
+        "regime_high_tp_pct": {"type": "float", "low": 0.02, "high": 0.30}
+    }
+}
+
+# ==============================================================================
 # OPTIMISEUR PRINCIPAL
 # ==============================================================================
 
 class PhoenixOptimizer:
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, fast_mode=False):
         self.config_path = 'config.json'
         self.config = self.load_config()
         self.display = TerminalDisplay()
         self.verbose = verbose
+        self.fast_mode = fast_mode  # Nouveau: mode rapide pour accélérer
         self.start_time = None
         
         # Statistiques
@@ -235,6 +290,39 @@ class PhoenixOptimizer:
             "Volatility_Regime_Adaptive": Volatility_Regime_Adaptive
         }
         return mapping.get(strategy_name)
+
+    def get_optuna_params(self, trial, strategy_name: str) -> Dict:
+        """Génère les paramètres pour Optuna à partir de l'espace de recherche"""
+        if strategy_name not in STRATEGY_SEARCH_SPACE:
+            raise ValueError(f"Stratégie {strategy_name} non trouvée dans l'espace de recherche")
+        
+        params = {}
+        param_space = STRATEGY_SEARCH_SPACE[strategy_name]
+        
+        for param_name, param_config in param_space.items():
+            param_type = param_config["type"]
+            
+            if param_type == "int":
+                params[param_name] = trial.suggest_int(
+                    param_name, 
+                    param_config["low"], 
+                    param_config["high"]
+                )
+            elif param_type == "float":
+                params[param_name] = trial.suggest_float(
+                    param_name, 
+                    param_config["low"], 
+                    param_config["high"]
+                )
+            elif param_type == "categorical":
+                params[param_name] = trial.suggest_categorical(
+                    param_name, 
+                    param_config["choices"]
+                )
+            else:
+                raise ValueError(f"Type de paramètre inconnu: {param_type}")
+        
+        return params
 
     def load_config(self) -> dict:
         """Charge la configuration depuis le fichier JSON"""
@@ -261,40 +349,34 @@ class PhoenixOptimizer:
         print(f"{Color.GRAY}▶ Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"▶ Version: 2.0.0")
         print(f"▶ Mode: {'Verbose' if self.verbose else 'Standard'}")
-        print(f"▶ Fichier config: {self.config_path}{Color.RESET}")
+        print(f"▶ Fichier config: {self.config_path}")
+        print(f"▶ Mode rapide: {'Activé' if self.fast_mode else 'Désactivé'}{Color.RESET}")
         print()
 
     def adjust_and_validate_params(self, strat_name: str, raw_params: Dict) -> Dict:
         """Ajuste et valide les paramètres pour qu'ils soient réalistes"""
         adjusted = raw_params.copy()
         
-        # Règles de sécurité communes (élargies pour plus de permissivité)
+        # Validation automatique basée sur l'espace de recherche
+        if strat_name in STRATEGY_SEARCH_SPACE:
+            for param_name, param_config in STRATEGY_SEARCH_SPACE[strat_name].items():
+                if param_name in adjusted:
+                    low = param_config.get("low", None)
+                    high = param_config.get("high", None)
+                    
+                    if low is not None and high is not None:
+                        adjusted[param_name] = np.clip(adjusted[param_name], low, high)
+        
+        # Logique de sécurité supplémentaire
         safety_rules = {
-            'stop_loss_pct': (0.005, 0.15),
-            'take_profit_pct': (0.01, 0.40),
-            'regime_low_sl_pct': (0.005, 0.10),
-            'regime_low_tp_pct': (0.01, 0.20),
-            'regime_high_sl_pct': (0.01, 0.15),
-            'regime_high_tp_pct': (0.02, 0.30),
-            'rsi_oversold': (15, 45),
-            'rsi_overbought': (55, 90),
-            'period': (5, 200),  # Élargi de 100 à 200
-            'short_window': (3, 50),  # Élargi de 30 à 50
-            'long_window': (10, 200),  # Élargi de 100 à 200
-            'buy_threshold': (0.85, 0.99),  # AJOUTÉ: Pour MeanReversion
-            'sell_threshold': (1.01, 1.20),  # AJOUTÉ: Pour MeanReversion
-            'ma_short': (5, 50),  # AJOUTÉ: Pour MA_Enhanced
-            'ma_long': (20, 200),  # AJOUTÉ: Pour MA_Enhanced
-            'min_volatility_filter': (0.0, 0.05),  # AJOUTÉ: Filtre de volatilité
+            'ma_short': ('ma_long', lambda x: x + 10),
+            'short_window': ('long_window', lambda x: x + 10),
         }
         
-        for param, (min_val, max_val) in safety_rules.items():
-            if param in adjusted:
-                try:
-                    if isinstance(adjusted[param], (int, float)):
-                        adjusted[param] = np.clip(adjusted[param], min_val, max_val)
-                except:
-                    pass
+        for param, (dep_param, adjust_func) in safety_rules.items():
+            if param in adjusted and dep_param in adjusted:
+                if adjusted[param] >= adjusted[dep_param]:
+                    adjusted[dep_param] = adjust_func(adjusted[param])
         
         # Assurer que Take Profit > Stop Loss
         for base in ['', 'regime_low_', 'regime_high_']:
@@ -303,55 +385,48 @@ class PhoenixOptimizer:
             
             if sl_key in adjusted and tp_key in adjusted:
                 if adjusted[tp_key] <= adjusted[sl_key]:
-                    adjusted[tp_key] = adjusted[sl_key] * 1.5  # Augmenté de 1.3 à 1.5
-        
-        # Assurer que short_window < long_window
-        if 'short_window' in adjusted and 'long_window' in adjusted:
-            if adjusted['short_window'] >= adjusted['long_window']:
-                adjusted['long_window'] = adjusted['short_window'] + 10
-        
-        # Assurer que ma_short < ma_long
-        if 'ma_short' in adjusted and 'ma_long' in adjusted:
-            if adjusted['ma_short'] >= adjusted['ma_long']:
-                adjusted['ma_long'] = adjusted['ma_short'] + 15
+                    adjusted[tp_key] = adjusted[sl_key] * 1.5
         
         return adjusted
 
     def calculate_strategy_score(self, results: Dict[str, Any], total_trades: int, pairs_tested: int) -> float:
-        """Calcule un score intelligent pour évaluer la stratégie"""
+        """
+        Calcule un score intelligent avec la nouvelle formule:
+        Score = (Gain * 0.5) + (Sharpe * 0.3) - (Drawdown * 2.0)
+        """
         if total_trades == 0:
             return -5.0
         
         total_return = results.get('total_return', 0)
         sharpe_ratio = results.get('sharpe_ratio', 0)
-        max_drawdown = max(results.get('max_drawdown', 1.0), 0.001)
+        max_drawdown = results.get('max_drawdown', 0)
+        
+        # NOUVELLE FORMULE: Score = (Gain * 0.5) + (Sharpe * 0.3) - (Drawdown * 2.0)
+        base_score = (total_return * 0.5) + (sharpe_ratio * 0.3) - (max_drawdown * 2.0)
+        
+        # Facteur de confiance basé sur le nombre de trades
+        if total_trades < 5:
+            confidence_factor = 0.3  # Très peu de trades = peu de confiance
+        elif total_trades < 20:
+            confidence_factor = 0.6  # Nombre modéré de trades
+        else:
+            confidence_factor = 1.0  # Assez de trades pour être confiant
+        
+        # Pénalité pour très faible win_rate
         win_rate = results.get('win_rate', 0)
+        if win_rate < 0.3:
+            base_score -= (0.3 - win_rate) * 2.0
         
-        # Score de base
-        base_score = (sharpe_ratio * 8) + (total_return * 60)
+        # Bonus pour très bon win_rate
+        if win_rate > 0.7:
+            base_score += (win_rate - 0.7) * 1.0
         
-        # Facteur de confiance
-        confidence_factor = min(np.sqrt(total_trades / 10), 3.0) if total_trades >= 5 else 0.5  # Réduit de 20 à 10
+        # Ajuster selon le nombre de paires testées
+        pair_factor = min(pairs_tested / 3.0, 1.0)  # Normaliser par 3 paires
         
-        # Bonus/Pénalités
-        bonus = 0
-        penalty = 0
+        final_score = base_score * confidence_factor * pair_factor
         
-        if total_return > 0:
-            bonus += total_return * 100  # Augmenté de 80 à 100
-        
-        if sharpe_ratio > 0:
-            bonus += sharpe_ratio * 30  # Augmenté de 25 à 30
-        
-        if max_drawdown > 0.30:
-            penalty -= 8 * (max_drawdown - 0.30)  # Réduit de 10 à 8
-        
-        # Bonus pour win_rate
-        if win_rate > 0.5:  # Win rate > 50%
-            bonus += (win_rate - 0.5) * 20
-        
-        final_score = (base_score * confidence_factor) + bonus + penalty
-        return max(final_score, -10)  # Réduit de -20 à -10
+        return max(final_score, -10)
 
     def format_duration(self, seconds):
         """Formate une durée en secondes en chaîne lisible"""
@@ -374,15 +449,29 @@ class PhoenixOptimizer:
             self.display.print_error(f"Stratégie '{strat_name}' introuvable")
             return {}
         
-        # Initialisation
-        bt = Backtester()
+        # Initialisation du backtester en mode approprié
+        bt = Backtester(verbose=False)
         pairs = self.config['trading']['pairs']
-        test_pairs = pairs[:3] if len(pairs) > 3 else pairs
+        
+        # MODIFICATION IMPORTANTE: Utiliser 3 paires pour l'optimisation
+        if len(pairs) >= 3:
+            test_pairs = pairs[:3]  # Les 3 premières paires
+            if self.verbose:
+                self.display.print_info(f"Utilisation de 3 paires pour l'optimisation: {', '.join(test_pairs)}")
+        elif len(pairs) == 2:
+            test_pairs = pairs  # Les 2 paires disponibles
+            if self.verbose:
+                self.display.print_info(f"Utilisation de 2 paires pour l'optimisation: {', '.join(test_pairs)}")
+        else:
+            test_pairs = pairs  # Une seule paire disponible
+            if self.verbose:
+                self.display.print_warning(f"Seulement 1 paire disponible: {test_pairs[0]}")
         
         self.display.print_section("Configuration")
         self.display.print_info(f"Paires de test: {', '.join(test_pairs)}")
         self.display.print_info(f"Essais d'optimisation: {n_trials}")
         self.display.print_info(f"Mode détaillé: {'Activé' if self.verbose else 'Désactivé'}")
+        self.display.print_info(f"Mode rapide: {'Activé' if self.fast_mode else 'Désactivé'}")
         
         # Variables de suivi
         trial_scores = []
@@ -390,25 +479,40 @@ class PhoenixOptimizer:
         best_params = {}
         
         def objective(trial):
-            # Générer les paramètres
-            raw_params = strat_class.get_optuna_params(trial)
+            # Générer les paramètres avec le nouvel espace de recherche
+            raw_params = self.get_optuna_params(trial, strat_name)
             params = self.adjust_and_validate_params(strat_name, raw_params)
             
-            # Backtests
+            # Backtests sur les 3 paires
             all_results = []
             total_trades_all = 0
             
             for pair in test_pairs:
                 try:
-                    result = bt.run_backtest(strat_name, override_params=params, pair=pair)
+                    # Utiliser le mode optimisation rapide si activé
+                    result = bt.run_backtest(
+                        strat_name, 
+                        override_params=params, 
+                        pair=pair,
+                        # optimization_mode=self.fast_mode  # Mode optimisation rapide si fast_mode=True
+                    )
                     all_results.append(result)
                     total_trades_all += result.get('total_trades', 0)
+                    
+                    if self.verbose and trial.number % 10 == 0:
+                        self.display.print_info(
+                            f"  {pair}: {result.get('total_trades', 0)} trades, "
+                            f"Return={result.get('total_return', 0)*100:.2f}%"
+                        )
+                        
                 except Exception as e:
                     if self.verbose:
                         self.display.print_warning(f"Erreur sur {pair}: {str(e)[:50]}...")
                     continue
             
             if not all_results:
+                if self.verbose:
+                    self.display.print_warning("Aucun résultat valide pour cet essai")
                 return -5.0
             
             # Agrégation et score
@@ -420,6 +524,16 @@ class PhoenixOptimizer:
                 'total_trades': total_trades_all
             }
             
+            # Afficher les détails si verbose
+            if self.verbose and trial.number % 5 == 0:
+                self.display.print_info(
+                    f"Essai {trial.number}: "
+                    f"Return={aggregated['total_return']*100:.2f}%, "
+                    f"Sharpe={aggregated['sharpe_ratio']:.2f}, "
+                    f"Drawdown={aggregated['max_drawdown']*100:.2f}%, "
+                    f"Trades={aggregated['total_trades']}"
+                )
+            
             score = self.calculate_strategy_score(aggregated, total_trades_all, len(test_pairs))
             trial_scores.append(score)
             
@@ -430,22 +544,28 @@ class PhoenixOptimizer:
                 best_params = params.copy()
             
             # Affichage de progression
-            if trial.number % 5 == 0 or trial.number == n_trials - 1:
+            if trial.number % 2 == 0 or trial.number == n_trials - 1:  # Plus fréquent pour 3 paires
                 elapsed = time.time() - self.start_time
                 avg_time = elapsed / (trial.number + 1)
                 remaining = avg_time * (n_trials - trial.number - 1)
+                
+                # Calcul des stats par paire pour l'affichage
+                avg_return = aggregated['total_return'] * 100
+                avg_sharpe = aggregated['sharpe_ratio']
+                avg_drawdown = aggregated['max_drawdown'] * 100
                 
                 self.display.print_progress(
                     trial.number + 1,
                     n_trials,
                     prefix=f"Essai {trial.number + 1:3d}/{n_trials}",
-                    suffix=f"Score: {score:6.2f} | Trades: {total_trades_all:3d} | Temps restant: {self.format_duration(remaining)}"
+                    suffix=f"Score: {score:6.2f} | Trades: {total_trades_all:3d} | Ret: {avg_return:+.1f}% | Reste: {self.format_duration(remaining)}"
                 )
             
             return score
         
         # Lancement de l'optimisation
         self.display.print_section("Lancement de l'optimisation")
+        self.display.print_info(f"Début de l'optimisation sur {len(test_pairs)} paires...")
         self.start_time = time.time()
         
         try:
@@ -468,7 +588,8 @@ class PhoenixOptimizer:
                 ["Essais effectués", f"{len(study.trials)}"],
                 ["Temps total", f"{self.format_duration(elapsed_time)}"],
                 ["Score moyen", f"{np.mean(trial_scores):.2f}"],
-                ["Meilleur essai", f"#{study.best_trial.number}"]
+                ["Meilleur essai", f"#{study.best_trial.number}"],
+                ["Paires utilisées", f"{len(test_pairs)}"]
             ]
             
             self.display.print_table(
@@ -477,14 +598,31 @@ class PhoenixOptimizer:
                 col_widths=[25, 15]
             )
             
-            # Affichage des meilleurs paramètres (avec try-except)
+            # Détails du meilleur score
+            if study.best_params:
+                self.display.print_section("Détails du meilleur score")
+                best_details = [
+                    ["Score Composite", f"{study.best_value:.2f}"],
+                    ["Formule:", ""],
+                    ["  - Gain × 0.5", f"{(study.best_value * 0.5):.2f}"],
+                    ["  - Sharpe × 0.3", f"{(study.best_value * 0.3):.2f}"],
+                    ["  - Drawdown × -2.0", f"{(study.best_value * -2.0):.2f}"]
+                ]
+                
+                self.display.print_table(
+                    ["Composant", "Valeur"],
+                    best_details,
+                    col_widths=[25, 15]
+                )
+            
+            # Affichage des meilleurs paramètres
             if study.best_params:
                 try:
                     self.display.print_param_box(study.best_params, "Paramètres optimaux")
                 except Exception as e:
                     self.display.print_error(f"Erreur lors de l'affichage des paramètres: {e}")
             
-            # Sauvegarde des paramètres optimaux (déplacé avant la validation)
+            # Sauvegarde des paramètres optimaux
             if study.best_params:
                 try:
                     self.save_optimized_params(strat_name, study.best_params)
@@ -492,14 +630,15 @@ class PhoenixOptimizer:
                 except Exception as e:
                     self.display.print_error(f"Erreur lors de la sauvegarde: {e}")
             
-            # Validation finale
-            self.display.print_section("Validation finale")
+            # Validation finale (avec toutes les paires)
+            self.display.print_section(f"Validation finale sur {len(pairs)} paires")
             
             final_results = []
             total_final_trades = 0
             
             for pair in pairs:
                 try:
+                    # Validation avec backtest complet (pas en mode optimisation)
                     result = bt.run_backtest(strat_name, override_params=study.best_params, pair=pair)
                     final_results.append((pair, result))
                     total_final_trades += result.get('total_trades', 0)
@@ -513,21 +652,43 @@ class PhoenixOptimizer:
                     trades = result.get('total_trades', 0)
                     ret = result.get('total_return', 0) * 100
                     sharpe = result.get('sharpe_ratio', 0)
+                    drawdown = result.get('max_drawdown', 0) * 100
+                    
+                    # Calcul du score de validation
+                    val_score = (result.get('total_return', 0) * 0.5) + \
+                               (sharpe * 0.3) - \
+                               (result.get('max_drawdown', 0) * 2.0)
                     
                     # Couleur pour le retour
                     ret_color = Color.GREEN if ret > 0 else Color.RED
                     ret_str = f"{ret_color}{ret:+.2f}%{Color.RESET}"
                     
-                    result_rows.append([pair, trades, ret_str, f"{sharpe:.2f}"])
+                    # Couleur pour le score
+                    score_color = Color.GREEN if val_score > 0 else Color.RED
+                    score_str = f"{score_color}{val_score:.2f}{Color.RESET}"
+                    
+                    result_rows.append([pair, trades, ret_str, f"{sharpe:.2f}", f"{drawdown:.2f}%", score_str])
                 
                 self.display.print_table(
-                    ["Paire", "Trades", "Retour %", "Sharpe"],
+                    ["Paire", "Trades", "Retour %", "Sharpe", "Drawdown", "Score"],
                     result_rows,
-                    col_widths=[10, 8, 12, 10]
+                    col_widths=[10, 8, 12, 10, 12, 10]
                 )
             
             # Afficher le total des trades
             self.display.print_info(f"Total trades sur validation: {total_final_trades}")
+            
+            # Afficher les moyennes
+            if final_results:
+                avg_return = np.mean([r[1].get('total_return', 0) * 100 for r in final_results])
+                avg_sharpe = np.mean([r[1].get('sharpe_ratio', 0) for r in final_results])
+                avg_drawdown = np.mean([r[1].get('max_drawdown', 0) * 100 for r in final_results])
+                
+                self.display.print_info(
+                    f"Moyennes: Retour={avg_return:+.2f}%, "
+                    f"Sharpe={avg_sharpe:.2f}, "
+                    f"Drawdown={avg_drawdown:.2f}%"
+                )
             
             return study.best_params
             
@@ -558,8 +719,7 @@ class PhoenixOptimizer:
                 json.dump(config, f, indent=4)
             
             # Backup
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = f"config_backup_{timestamp}.json"
             with open(backup_file, 'w') as f:
                 json.dump(config, f, indent=4)
@@ -585,13 +745,15 @@ class PhoenixOptimizer:
             ["Stratégies à optimiser", f"{len(strategy_list)}"],
             ["Essais par stratégie", f"{n_trials_per_strat}"],
             ["Date de début", datetime.now().strftime("%H:%M:%S")],
-            ["Mode", "Complet"]
+            ["Mode", "Complet"],
+            ["Paires par optimisation", "3 (ou moins si <3)"],
+            ["Score Formula", "(Gain*0.5)+(Sharpe*0.3)-(Drawdown*2.0)"]
         ]
         
         self.display.print_table(
             ["Paramètre", "Valeur"],
             summary_table,
-            col_widths=[25, 20]
+            col_widths=[25, 30]
         )
         
         # Optimisation séquentielle
@@ -610,8 +772,9 @@ class PhoenixOptimizer:
             
             # Pause entre les stratégies
             if i < len(strategy_list) - 1:
-                self.display.print_info(f"Pause de 2 secondes avant la prochaine stratégie...")
-                time.sleep(2)
+                pause_time = 5 if self.fast_mode else 2
+                self.display.print_info(f"Pause de {pause_time} secondes avant la prochaine stratégie...")
+                time.sleep(pause_time)
         
         # Résumé final
         total_time = time.time() - total_start_time
@@ -657,7 +820,9 @@ class PhoenixOptimizer:
             "Lancer 'python backtest.py' pour tester les performances",
             "Consulter 'config_backup_*.json' pour les sauvegardes",
             "Utiliser '--verbose' pour plus de détails",
-            "Exécuter '--check-data' pour vérifier les données"
+            "Exécuter '--check-data' pour vérifier les données",
+            "Nouveau score: (Gain*0.5)+(Sharpe*0.3)-(Drawdown*2.0)",
+            "Optimisation effectuée sur 3 paires (plus robuste)"
         ]
         
         for i, tip in enumerate(tips, 1):
@@ -671,17 +836,30 @@ class PhoenixOptimizer:
         self.display.print_header(f"TEST RAPIDE : {strategy_name}")
         
         try:
-            bt = Backtester()
+            bt = Backtester(verbose=self.verbose)
             result = bt.run_backtest(strategy_name)
             
             if result:
                 self.display.print_section("Résultats du test")
                 
+                # Calcul du nouveau score
+                total_return = result.get('total_return', 0)
+                sharpe_ratio = result.get('sharpe_ratio', 0)
+                max_drawdown = result.get('max_drawdown', 0)
+                
+                score = (total_return * 0.5) + (sharpe_ratio * 0.3) - (max_drawdown * 2.0)
+                
                 # Tableau des résultats
                 results_rows = [
-                    ["Retour total", f"{result.get('total_return', 0)*100:+.2f}%"],
-                    ["Ratio de Sharpe", f"{result.get('sharpe_ratio', 0):.3f}"],
-                    ["Max Drawdown", f"{result.get('max_drawdown', 0)*100:.2f}%"],
+                    ["Score Composite", f"{score:.2f}"],
+                    ["Breakdown:", ""],
+                    ["  - Gain (x0.5)", f"{total_return * 0.5:.3f}"],
+                    ["  - Sharpe (x0.3)", f"{sharpe_ratio * 0.3:.3f}"],
+                    ["  - Drawdown Penalty (x2.0)", f"{max_drawdown * -2.0:.3f}"],
+                    ["", ""],
+                    ["Retour total", f"{total_return*100:+.2f}%"],
+                    ["Ratio de Sharpe", f"{sharpe_ratio:.3f}"],
+                    ["Max Drawdown", f"{max_drawdown*100:.2f}%"],
                     ["Win Rate", f"{result.get('win_rate', 0)*100:.1f}%"],
                     ["Nombre de trades", f"{result.get('total_trades', 0)}"],
                     ["Profit Factor", f"{result.get('profit_factor', 0):.2f}"]
@@ -690,7 +868,7 @@ class PhoenixOptimizer:
                 self.display.print_table(
                     ["Métrique", "Valeur"],
                     results_rows,
-                    col_widths=[20, 15]
+                    col_widths=[30, 20]
                 )
                 
                 # Afficher les paramètres utilisés
@@ -711,7 +889,7 @@ class PhoenixOptimizer:
         """Vérifie la qualité des données avec affichage organisé"""
         self.display.print_header("VÉRIFICATION DES DONNÉES")
         
-        bt = Backtester()
+        bt = Backtester(verbose=True)  # Activer verbose pour voir la progression
         pairs = self.config['trading']['pairs'][:5]  # Limiter à 5 paires
         
         self.display.print_section("Analyse des données disponibles")
@@ -719,7 +897,7 @@ class PhoenixOptimizer:
         data_rows = []
         for pair in pairs:
             try:
-                df = bt.load_data(pair)
+                df = bt.get_cached_data(pair, interval='1', total_candles=10000)
                 if df is not None and len(df) > 0:
                     days = len(df) / (24 * 60)  # Convertir bougies 1min en jours
                     volatility = df['close'].pct_change().std() * 100
@@ -817,6 +995,16 @@ class PhoenixOptimizer:
                     int
                 )
                 
+                # Demander si mode rapide
+                fast_mode_choice = self.display.get_user_input(
+                    "Mode rapide? (oui/non) [oui]",
+                    "oui"
+                )
+                fast_mode = fast_mode_choice.lower() in ['oui', 'yes', 'y', 'o']
+                
+                # Configurer le mode rapide
+                self.fast_mode = fast_mode
+                
                 # Lancer l'optimisation
                 self.run_multi_strategy_optimization(strategies_to_optimize, n_trials_per_strat=trials)
                 
@@ -847,6 +1035,16 @@ class PhoenixOptimizer:
                         50,  # Valeur par défaut
                         int
                     )
+                    
+                    # Demander si mode rapide
+                    fast_mode_choice = self.display.get_user_input(
+                        "Mode rapide? (oui/non) [oui]",
+                        "oui"
+                    )
+                    fast_mode = fast_mode_choice.lower() in ['oui', 'yes', 'y', 'o']
+                    
+                    # Configurer le mode rapide
+                    self.fast_mode = fast_mode
                     
                     # Lancer l'optimisation
                     self.optimize_strategy(strategy, n_trials=trials)
@@ -929,6 +1127,8 @@ Pour plus d'informations:
                        help='Mode rapide avec moins d\'essais')
     parser.add_argument('--interactive', '-i', action='store_true',
                        help='Lancer le mode interactif (menu)')
+    parser.add_argument('--fast-mode', action='store_true',
+                       help='Mode optimisation rapide (moins de données)')
     
     args = parser.parse_args()
     
@@ -937,7 +1137,7 @@ Pour plus d'informations:
         args.trials = 20
     
     # Créer l'optimiseur
-    optimizer = PhoenixOptimizer(verbose=args.verbose)
+    optimizer = PhoenixOptimizer(verbose=args.verbose, fast_mode=args.fast_mode)
     
     # Exécuter la commande appropriée
     if args.interactive:
@@ -973,22 +1173,31 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n{Color.RED}Erreur inattendue: {e}{Color.RESET}")
         sys.exit(1)
+
+
+"""""""""""""""""""""""
+Nouveau paramètre --fast-mode
+"""""""""""""""""""""""
 """
-# Mode interactif (demande tout)
-python optimize.py
+# Optimisation rapide (3 paires, données réduites)
+python optimize.py --strategy MA_Enhanced --trials 30 --fast-mode --verbose
 
-# Mode interactif explicite
-python optimize.py --interactive
+# Optimisation complète (3 paires, données complètes)
+python optimize.py --strategy MA_Enhanced --trials 30 --verbose
+"""
+"""""""""""""""""""""""""""""""""
+Commandes recommandées maintenant :
+""""""""""""""""""""""""""""""
+"
+# Test rapide sur 1 paire
+python optimize.py --strategy MA_Enhanced --test --verbose
 
-# Vérification données
-python optimize.py --check-data
+# Optimisation rapide (3 paires, mode rapide)
+python optimize.py --strategy MA_Enhanced --trials 30 --fast-mode --verbose
 
-# Test rapide
-python optimize.py --strategy MeanReversion --test --verbose
+# Optimisation complète (3 paires, données complètes)
+python optimize.py --strategy MA_Enhanced --trials 50 --verbose
 
-# Optimisation simple
-python optimize.py --strategy MA_Enhanced --trials 40
-
-# Optimisation complète
-python optimize.py --all --trials 50 --verbose
+# Toutes les stratégies en mode rapide
+python optimize.py --all --trials 30 --fast-mode --verbose
 """
