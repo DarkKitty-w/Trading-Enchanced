@@ -56,21 +56,21 @@
         ],
         "parameters": {
             "MeanReversion": {
-                "period": 44,
-                "buy_threshold": 0.9965850010140859,
-                "sell_threshold": 1.0734674002393292,
-                "stop_loss_pct": 0.019821770842031468,
-                "take_profit_pct": 0.039638958863878505,
-                "min_volatility_filter": 0.012013303835521029
+                "period": 29,
+                "buy_threshold": 0.9927821437884462,
+                "sell_threshold": 1.0745394244720836,
+                "stop_loss_pct": 0.012020838819909644,
+                "take_profit_pct": 0.02403950683025824,
+                "min_volatility_filter": 0.0015751320499779737
             },
             "MA_Enhanced": {
-                "short_window": 20,
-                "long_window": 144,
-                "volatility_threshold": 0.02209382128343645,
-                "stop_loss_pct": 0.022939369838663303,
-                "take_profit_pct": 0.023940066920367868,
+                "short_window": 7,
+                "long_window": 21,
+                "volatility_threshold": 0.00022021350470890875,
+                "stop_loss_pct": 0.007910142818154303,
+                "take_profit_pct": 0.02019405438009899,
                 "trend_confirmation_candles": 1,
-                "crossover_threshold": 0.012013303835521029
+                "crossover_threshold": 0.004098979902882645
             },
             "Momentum_Enhanced": {
                 "period": 24,
@@ -104,19 +104,19 @@
                 "ma_weight": 0.4824279936868143
             },
             "Volatility_Regime_Adaptive": {
-                "lookback": 98,
-                "low_vol_period": 20,
-                "vol_threshold": 0.006582956008452696,
-                "regime_low_sl_pct": 0.05585015499955529,
-                "regime_low_tp_pct": 0.01917003768503007,
-                "regime_high_sl_pct": 0.041391740802890986,
-                "regime_high_tp_pct": 0.02919075587198615,
-                "low_regime_multiplier": 1.307699012435673,
-                "high_regime_multiplier": 1.34640563762471,
-                "regime_low_entry_pct": 0.0020165160986256674,
-                "regime_low_exit_pct": 0.006666710916015899,
-                "regime_high_entry_pct": 0.0032275088969433994,
-                "regime_high_exit_pct": 0.024703109245875293
+                "lookback": 42,
+                "low_vol_period": 29,
+                "vol_threshold": 0.01124791518535967,
+                "regime_low_sl_pct": 0.029782540222861597,
+                "regime_low_tp_pct": 0.011440914600706172,
+                "regime_high_sl_pct": 0.05849549260809971,
+                "regime_high_tp_pct": 0.10324426408004217,
+                "low_regime_multiplier": 1.0394633936788147,
+                "high_regime_multiplier": 0.8624074561769747,
+                "regime_low_entry_pct": 0.008899863008405066,
+                "regime_low_exit_pct": 0.009858675589382382,
+                "regime_high_entry_pct": 0.03571763666479792,
+                "regime_high_exit_pct": 0.034044600469728355
             }
         }
     },
