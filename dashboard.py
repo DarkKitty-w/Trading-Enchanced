@@ -1,256 +1,198 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 from supabase import create_client
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION PAGE & THEME ---
+# --- 1. CONFIGURATION INITIALE ---
 st.set_page_config(
-    page_title="PHOENIX STRATEGY COMMANDER",
+    page_title="Phoenix Strategy Analyzer",
     page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Chargement env
 load_dotenv()
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
 
-# --- 2. CSS MODERNE (Style "Command Center") ---
+# --- 2. STYLE CSS "DARK PRO" ---
 st.markdown("""
 <style>
-    /* Fond sombre global */
-    .stApp {
-        background-color: #0e1117;
+    .stApp { background-color: #0e1117; }
+    div[data-testid="stMetric"] {
+        background-color: #1a1c24; border: 1px solid #2d303e;
+        padding: 10px; border-radius: 8px;
     }
-    
-    /* Style des onglets (Tabs) */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
+    h1, h2, h3 { color: #ffffff; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
     .stTabs [data-baseweb="tab"] {
-        background-color: #1e293b;
-        border-radius: 4px;
-        color: white;
-        padding: 10px 20px;
+        height: 50px; white-space: pre-wrap;
+        background-color: #1a1c24; border-radius: 4px 4px 0px 0px;
+        gap: 1px; padding-top: 10px; padding-bottom: 10px; color: white;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #3b82f6 !important;
-        color: white !important;
+        background-color: #2d303e; border-bottom: 2px solid #00ff7f;
     }
-
-    /* Cartes de métriques */
-    div[data-testid="stMetric"] {
-        background-color: #1a1c24;
-        border: 1px solid #334155;
-        padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    
-    /* Titres */
-    h1, h2, h3 { color: #f8fafc; }
-    p { color: #cbd5e1; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 3. CONNEXION DB ---
 @st.cache_resource
 def init_connection():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        st.error("⚠️ Identifiants Supabase manquants (.env)")
-        st.stop()
+    if not url or not key: return None
     return create_client(url, key)
 
 supabase = init_connection()
 
 # --- 4. RÉCUPÉRATION DES DONNÉES ---
 def get_data():
-    """Récupère et nettoie toutes les données nécessaires"""
-    try:
-        # 1. Trades
-        trades_resp = supabase.table('trades').select("*").execute()
-        trades_df = pd.DataFrame(trades_resp.data)
-        if not trades_df.empty:
-            trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
-            trades_df = trades_df.sort_values('timestamp')
+    if not supabase: return pd.DataFrame(), pd.DataFrame()
+    
+    # Récupération Portfolio (Positions actuelles)
+    res_port = supabase.table('portfolio_state').select("*").execute()
+    df_port = pd.DataFrame(res_port.data) if res_port.data else pd.DataFrame()
+    
+    # Récupération Trades (Historique)
+    res_trades = supabase.table('trades').select("*").execute()
+    df_trades = pd.DataFrame(res_trades.data) if res_trades.data else pd.DataFrame()
+    
+    return df_port, df_trades
 
-        # 2. Portfolio (Positions actuelles)
-        port_resp = supabase.table('portfolio_state').select("*").execute()
-        port_df = pd.DataFrame(port_resp.data)
-        if not port_df.empty:
-            port_df['updated_at'] = pd.to_datetime(port_df['updated_at'])
-            # Garder seulement la dernière entrée pour chaque paire (Asset + Strategy)
-            port_df = port_df.sort_values('updated_at').groupby(['symbol', 'strategy']).tail(1)
-            # Retirer les quantités nulles (positions fermées)
-            port_df = port_df[port_df['quantity'] > 0]
-
-        return trades_df, port_df
-    except Exception as e:
-        st.error(f"Erreur DB: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+df_portfolio, df_trades = get_data()
 
 # --- 5. CALCULS PAR STRATÉGIE ---
-def calculate_strategy_curve(trades_df, strategy_name):
-    """Calcule la courbe de PnL cumulé pour une stratégie donnée"""
+def process_strategy_curve(trades_df, strategy_name, initial_capital=1000):
+    """Calcule la courbe d'équité pour UNE stratégie spécifique"""
     if trades_df.empty: return pd.DataFrame()
     
-    # Filtrer par stratégie
+    # Filtrer pour la stratégie demandée
     strat_trades = trades_df[trades_df['strategy'] == strategy_name].copy()
     if strat_trades.empty: return pd.DataFrame()
     
-    # On calcule le PnL cumulé au fil du temps
-    # Note: On suppose que la colonne 'pnl' est remplie dans la DB lors de la vente.
-    # Si 'pnl' est 0 (ex: achat), le cumul ne bouge pas.
-    strat_trades['cumulative_pnl'] = strat_trades['pnl'].cumsum()
+    strat_trades['timestamp'] = pd.to_datetime(strat_trades['timestamp'])
+    strat_trades = strat_trades.sort_values('timestamp')
     
-    return strat_trades[['timestamp', 'cumulative_pnl']]
+    running_pnl = 0
+    history = []
+    
+    # Point de départ
+    history.append({'timestamp': strat_trades['timestamp'].iloc[0] - timedelta(minutes=1), 'equity': 0})
+    
+    # On reconstitue le PnL cumulé (Somme des 'pnl' enregistrés en base)
+    # Note: Votre Metrics.py enregistre le PnL réalisé dans la colonne 'pnl' de la table trades
+    for idx, row in strat_trades.iterrows():
+        pnl = row.get('pnl', 0)
+        running_pnl += pnl
+        history.append({'timestamp': row['timestamp'], 'equity': running_pnl})
+        
+    return pd.DataFrame(history)
 
 # --- 6. INTERFACE ---
 
-# Sidebar
-with st.sidebar:
-    st.title("🦅 Phoenix Control")
-    st.write("Filtres globaux")
-    if st.button("🔄 Actualiser Données"):
-        st.rerun()
+st.title("🦅 Phoenix : Analyse Sectorielle")
+st.caption("Séparation stricte des performances par stratégie")
+
+if df_trades.empty:
+    st.error("⚠️ Aucune donnée de trade trouvée. Avez-vous lancé le bot ?")
+    st.stop()
+
+# Liste des stratégies uniques trouvées dans l'historique
+strategies_list = df_trades['strategy'].unique().tolist()
+
+# === ONGLET 1 : LA COURSE (COMPARAISON) ===
+tab1, tab2 = st.tabs(["🏆 Comparatif Global", "🔍 Détail par Stratégie"])
+
+with tab1:
+    st.subheader("Performance Relative (Qui gagne ?)")
+    
+    fig_comp = go.Figure()
+    
+    for strat in strategies_list:
+        df_curve = process_strategy_curve(df_trades, strat)
+        if not df_curve.empty:
+            fig_comp.add_trace(go.Scatter(
+                x=df_curve['timestamp'], 
+                y=df_curve['equity'], 
+                mode='lines', 
+                name=strat,
+                line=dict(width=2)
+            ))
+            
+    fig_comp.update_layout(
+        template="plotly_dark",
+        yaxis_title="Gains/Pertes Cumulés ($)",
+        height=500,
+        legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0.5, xanchor="center"),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig_comp, use_container_width=True)
+
+# === ONGLET 2 : LE MICROSCOPE (DÉTAIL) ===
+with tab2:
+    col_sel, col_blank = st.columns([1, 2])
+    with col_sel:
+        selected_strat = st.selectbox("📂 Choisir la Stratégie à analyser :", strategies_list)
     
     st.markdown("---")
-    st.warning("⚠️ Zone Danger")
-    if st.button("💥 RESET DATABASE (Tout effacer)"):
-        supabase.table('trades').delete().neq('id', '0').execute()
-        supabase.table('portfolio_state').delete().neq('symbol', '0').execute()
-        st.success("Base de données vidée !")
-        st.rerun()
-
-# Chargement
-trades_df, port_df = get_data()
-
-st.title("📊 Performance par Stratégie")
-
-# Liste des stratégies détectées
-if not trades_df.empty:
-    strategies = trades_df['strategy'].unique().tolist()
-else:
-    strategies = []
     
-# Ajout d'une vue "Globale"
-all_tabs = ["🔍 VUE D'ENSEMBLE"] + strategies
-tabs = st.tabs(all_tabs)
-
-# --- ONGLET 1 : VUE D'ENSEMBLE (COMPARATIF) ---
-with tabs[0]:
-    col1, col2 = st.columns([3, 1])
+    # Filtrage des données pour la stratégie choisie
+    strat_trades = df_trades[df_trades['strategy'] == selected_strat]
     
-    with col1:
-        st.subheader("⚔️ Comparaison des Performances")
-        if not trades_df.empty:
-            # Création d'un graphique multiline
-            fig = go.Figure()
-            
-            for strat in strategies:
-                curve = calculate_strategy_curve(trades_df, strat)
-                if not curve.empty:
-                    fig.add_trace(go.Scatter(
-                        x=curve['timestamp'], 
-                        y=curve['cumulative_pnl'],
-                        mode='lines',
-                        name=strat,
-                        line=dict(width=2)
-                    ))
-            
-            fig.update_layout(
-                template="plotly_dark",
-                xaxis_title="Temps",
-                yaxis_title="Profit Cumulé ($)",
-                height=500,
-                legend=dict(orientation="h", y=1.1)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Aucun trade enregistré pour le moment.")
-
-    with col2:
-        st.subheader("🏆 Classement")
-        if not trades_df.empty:
-            leaderboard = trades_df.groupby('strategy')['pnl'].sum().sort_values(ascending=False).reset_index()
-            leaderboard.columns = ['Stratégie', 'Profit Total ($)']
-            
-            # Affichage joli avec couleur conditionnelle
-            st.dataframe(
-                leaderboard.style.format({'Profit Total ($)': '{:.2f}'})
-                .background_gradient(cmap='RdYlGn', subset=['Profit Total ($)']),
-                use_container_width=True,
-                hide_index=True
-            )
-
-# --- ONGLETS DYNAMIQUES : DÉTAIL PAR STRATÉGIE ---
-for i, strat in enumerate(strategies):
-    with tabs[i + 1]: # +1 car le 0 est la vue d'ensemble
-        st.markdown(f"## Détails: {strat}")
-        
-        # Filtres spécifiques à la stratégie
-        strat_trades = trades_df[trades_df['strategy'] == strat]
-        strat_positions = port_df[port_df['strategy'] == strat] if not port_df.empty else pd.DataFrame()
-        
-        # Métriques Rapides
+    if not strat_trades.empty:
+        # Calculs KPIs
         total_pnl = strat_trades['pnl'].sum()
-        win_rate = (len(strat_trades[strat_trades['pnl'] > 0]) / len(strat_trades)) * 100 if len(strat_trades) > 0 else 0
-        nb_trades = len(strat_trades)
+        win_trades = len(strat_trades[strat_trades['pnl'] > 0])
+        total_count = len(strat_trades)
+        win_rate = (win_trades / total_count * 100) if total_count > 0 else 0
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric("💰 Profit Net", f"${total_pnl:+.2f}", delta_color="normal")
-        m2.metric("🎯 Win Rate", f"{win_rate:.1f}%")
-        m3.metric("🔄 Total Trades", nb_trades)
+        # Affichage Métriques
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Gains Net (PnL)", f"${total_pnl:,.2f}", delta_color="normal")
+        c2.metric("Nombre de Trades", total_count)
+        c3.metric("Win Rate", f"{win_rate:.1f}%")
         
-        st.divider()
+        # Graphique Spécifique (Area Chart)
+        df_curve_strat = process_strategy_curve(df_trades, selected_strat)
         
-        # Courbe Spécifique (Area Chart)
-        curve = calculate_strategy_curve(trades_df, strat)
-        if not curve.empty:
-            fig_strat = px.area(
-                curve, x='timestamp', y='cumulative_pnl',
-                title=f"Courbe d'Équité - {strat}",
-                template="plotly_dark"
-            )
-            fig_strat.update_traces(line_color='#3b82f6', fillcolor="rgba(59, 130, 246, 0.2)")
-            st.plotly_chart(fig_strat, use_container_width=True)
-            
-        # Positions Actives (Cartes comme demandé)
-        st.subheader("📦 Positions Actives")
-        if not strat_positions.empty:
-            cols = st.columns(4)
-            for idx, row in strat_positions.iterrows():
-                # Calcul PnL latent approximatif (si on avait le prix actuel, ici on simule)
-                # entry_price = row['entry_price']
-                # current_price = ... (Besoin de fetcher le prix live pour être précis)
-                
-                with cols[idx % 4]:
-                    st.markdown(f"""
-                    <div style="background-color: #1e293b; padding: 15px; border-radius: 8px; border-left: 5px solid #3b82f6;">
-                        <h4 style="margin:0; color:white;">{row['symbol']}</h4>
-                        <p style="margin:5px 0; color:#94a3b8; font-size:12px;">Qté: {row['quantity']:.4f}</p>
-                        <p style="margin:0; color:#e2e8f0; font-weight:bold;">Entrée: ${row['entry_price']:.4f}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.info("Aucune position ouverte pour cette stratégie.")
-
-        # Historique Récent
-        st.subheader("📜 Derniers Trades")
-        st.dataframe(
-            strat_trades[['timestamp', 'side', 'symbol', 'price', 'quantity', 'pnl']]
-            .sort_values('timestamp', ascending=False)
-            .head(10)
-            .style.format({
-                'price': '{:.4f}', 
-                'quantity': '{:.4f}', 
-                'pnl': '{:+.2f}'
-            })
-            .applymap(lambda v: 'color: #ef4444' if v < 0 else 'color: #22c55e' if v > 0 else '', subset=['pnl']),
-            use_container_width=True
+        fig_strat = px.area(
+            df_curve_strat, x='timestamp', y='equity', 
+            title=f"Courbe de Profit : {selected_strat}",
+            template="plotly_dark"
         )
+        fig_strat.update_traces(line_color='#00ff7f', fillcolor='rgba(0, 255, 127, 0.1)')
+        fig_strat.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_strat, use_container_width=True)
+        
+        # Positions Actuelles de CETTE stratégie
+        st.subheader(f"Positions Actives : {selected_strat}")
+        if not df_portfolio.empty:
+            strat_positions = df_portfolio[
+                (df_portfolio['strategy'] == selected_strat) & 
+                (df_portfolio['symbol'] != 'USDT') &
+                (df_portfolio['quantity'] > 0)
+            ]
+            
+            if not strat_positions.empty:
+                # Joli tableau
+                display_df = strat_positions[['symbol', 'quantity', 'entry_price', 'updated_at']].copy()
+                display_df.columns = ['Crypto', 'Quantité', 'Prix Entrée', 'Dernière MàJ']
+                st.dataframe(display_df, use_container_width=True)
+            else:
+                st.info(f"Aucune position ouverte pour {selected_strat} en ce moment.")
+    else:
+        st.warning("Pas encore de trades pour cette stratégie.")
+
+# --- SIDEBAR : BOUTON RESET ---
+with st.sidebar:
+    st.markdown("### ⚠️ Zone Danger")
+    if st.button("VIDER TOUTE LA BASE DE DONNÉES", type="primary"):
+        try:
+            supabase.table('trades').delete().neq('id', '0').execute()
+            supabase.table('portfolio_state').delete().neq('symbol', '0').execute()
+            st.toast("Base de données effacée ! Rechargez la page.", icon="💥")
+        except Exception as e:
+            st.error(f"Erreur: {e}")
