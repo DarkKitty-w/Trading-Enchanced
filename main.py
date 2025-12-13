@@ -78,30 +78,36 @@ class PhoenixBot:
         (Correction de l'indentation ici)
         """
         initial_capital = self.config.get("trading", {}).get("initial_capital", 1000.0)
-        nb_strategies = len(self.strategies)
-        
-        if nb_strategies == 0:
-            return
-
-        capital_per_strategy = initial_capital / nb_strategies
-        
-        # Pour chaque stratégie active, on vérifie si elle a son compte USDT
+        changes_made = False
         for strategy_name in self.strategies.keys():
+            # On vérifie si elle a déjà son compte USDT dans le portfolio chargé
             usdt_found = False
             for asset in self.portfolio:
                 if asset['symbol'] == "USDT" and asset['strategy'] == strategy_name:
                     usdt_found = True
                     break
             
+            # Si elle n'a pas de compte, on le crée avec le PLEIN MONTANT
             if not usdt_found:
-                self.portfolio.append({
+                new_cash_entry = {
                     "symbol": "USDT",
                     "strategy": strategy_name,
-                    "quantity": capital_per_strategy,
+                    "quantity": initial_capital, # <-- MODIFIÉ : On donne 100% à chacun
                     "entry_price": 1.0,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                })
-                logger.info(f"💰 Cash USDT initialisé pour {strategy_name}: {capital_per_strategy:.2f} USDT")
+                }
+                self.portfolio.append(new_cash_entry)
+                logger.info(f"💰 Cash USDT initialisé pour {strategy_name}: {initial_capital:.2f} USDT")
+                changes_made = True
+
+        # --- FIX: SAUVEGARDE IMMÉDIATE ---
+        # Si on a ajouté de l'argent, on l'écrit tout de suite en BDD
+        if changes_made:
+            try:
+                self.db.save_portfolio(self.portfolio)
+                logger.info("💾 Portefeuille initial (Cash) sauvegardé en base de données.")
+            except Exception as e:
+                logger.error(f"❌ Erreur sauvegarde initiale: {e}")
 
     async def fetch_market_data(self, symbol: str) -> pd.DataFrame:
         """Récupère les données via CoinLore (API Gratuite)"""
