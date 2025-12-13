@@ -54,9 +54,9 @@ class PhoenixBot:
         
         # Initialisation des modules
         self.db = DatabaseHandler()
-        self.executor = ExecutionManager(self.config)
+        self.executor = ExecutionManager(self.config)  # Passer la configuration ici
         self.analytics = AdvancedChartGenerator()
-        self.strategies = get_active_strategies(self.config)  # Maintenant une liste
+        self.strategies = get_active_strategies(self.config)
         
         # Chargement de l'état
         self.portfolio = self.db.load_portfolio()
@@ -65,8 +65,6 @@ class PhoenixBot:
         
         # Initialisation du cash USDT si non présent
         self._initialize_portfolio()
-        
-        logger.info(f"✅ {len(self.strategies)} stratégies actives chargées")
 
     def _initialize_portfolio(self):
         """Initialise le portefeuille avec du cash USDT si vide"""
@@ -128,12 +126,10 @@ class PhoenixBot:
             df = await self.fetch_market_data(symbol)
             
             if df.empty:
-                logger.warning(f"⚠️ Données vides pour {symbol}")
                 continue
 
-            # Analyse par chaque stratégie active (maintenant une liste)
-            for strategy in self.strategies:  # Itération directe sur la liste
-                name = strategy.name
+            # Analyse par chaque stratégie active
+            for name, strategy in self.strategies.items():
                 
                 # Vérification de position existante
                 current_qty = 0
@@ -142,35 +138,19 @@ class PhoenixBot:
                         current_qty = item['quantity']
                         break
                 
-                # Appel de la méthode analyze() pour obtenir le signal
-                signal_action = strategy.analyze(df)
-                
-                # Si pas de signal, on passe
-                if signal_action == "HOLD":
-                    continue
-                
-                # Construction du dictionnaire de signal
-                signal = {
-                    'symbol': symbol,
-                    'side': signal_action,  # 'BUY' ou 'SELL'
-                    'price': df['close'].iloc[-1],
-                    'quantity': 0.01,  # Quantité fixe pour l'instant - à améliorer
-                    'strategy': name
-                }
-                
-                # RÈGLE ANTI-SPAM : Si le signal est ACHAT mais qu'on a déjà du stock
-                if signal['side'] == "BUY" and current_qty > 0:
-                    logger.debug(f"Signal ignoré sur {symbol} (Position existante)")
-                    continue
-                
-                # Si c'est une VENTE, on vérifie qu'on a quelque chose à vendre
-                if signal['side'] == "SELL" and current_qty == 0:
-                    logger.debug(f"Signal vente ignoré sur {symbol} (Pas de position)")
-                    continue
+                signal = strategy.generate_signals(df, symbol)
 
-                logger.info(f"⚡ Signal détecté sur {symbol} par {name}: {signal_action}")
-                
-                try:
+                if signal:
+                    # RÈGLE ANTI-SPAM : Si le signal est ACHAT mais qu'on a déjà du stock
+                    if signal['side'] == "BUY" and current_qty > 0:
+                        continue
+                    
+                    # Si c'est une VENTE, on vérifie qu'on a quelque chose à vendre
+                    if signal['side'] == "SELL" and current_qty == 0:
+                        continue
+
+                    logger.info(f"⚡ Signal détecté sur {symbol}: {signal}")
+                    
                     # Exécution du trade
                     trade_result = await self.executor.execute_trade(
                         signal, 
@@ -186,21 +166,14 @@ class PhoenixBot:
                         # Sauvegarde immédiate
                         self.db.save_trades(self.trades_history)
                         self.db.save_portfolio(self.portfolio)
-                        
-                        logger.info(f"✅ Trade exécuté: {trade_result}")
-                except Exception as e:
-                    logger.error(f"❌ Erreur lors de l'exécution du trade: {e}")
 
         # Snapshot du portefeuille pour l'historique
-        try:
-            total_value = FinancialMetrics.calculate_total_value(self.portfolio, self.strategies)
-            self.portfolio_history.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "total_value": total_value,
-                "details": self.portfolio.copy()
-            })
-        except Exception as e:
-            logger.error(f"❌ Erreur lors du calcul de la valeur totale: {e}")
+        total_value = FinancialMetrics.calculate_total_value(self.portfolio, self.strategies)
+        self.portfolio_history.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_value": total_value,
+            "details": self.portfolio.copy()
+        })
 
     def update_portfolio(self, current_portfolio, trade_data):
         """Mise à jour du portefeuille CORRIGÉE"""
