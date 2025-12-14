@@ -1,206 +1,216 @@
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Any, Protocol
+from dataclasses import dataclass
+
+# ==============================================================================
+# 1. CONTRATS DE DONNÉES (INTERFACES STRICTES)
+# ==============================================================================
+
+@dataclass
+class PortfolioSnapshot:
+    """
+    Représente l'état du portefeuille à un instant T.
+    Doit impérativement contenir 'timestamp' et 'total_equity'.
+    """
+    timestamp: Any  # datetime ou str iso
+    total_equity: float
+
+@dataclass
+class CompletedTrade:
+    """
+    Représente un trade TERMINE (Round-Trip) avec un résultat PnL.
+    Ce n'est pas juste un ordre d'exécution, mais le bilan entrée/sortie.
+    """
+    trade_id: str
+    symbol: str
+    pnl: float          # Profit/Perte en USD
+    return_pct: float   # Rendement en % (ex: 0.05 pour 5%)
+    duration: float     # Durée en secondes/minutes
+    side: str           # 'LONG' ou 'SHORT'
+
+# ==============================================================================
+# 2. MOTEUR DE CALCUL (PURE FUNCTIONS)
+# ==============================================================================
 
 class FinancialMetrics:
     """
-    Bibliothèque de calculs financiers et de gestion de risque.
-    Centralise les formules mathématiques utilisées par le Backtester et le Dashboard.
+    Moteur de calcul financier pur.
+    
+    Principes :
+    1. Stateless : Pas d'état interne.
+    2. Input Strict : Attend des Listes d'Objets typés ou des Series Pandas.
+    3. Fail-Fast : Pas de .get(), pas de valeurs par défaut magiques.
     """
 
     @staticmethod
-    def calculate_sharpe_ratio(portfolio_history: List[Dict], risk_free_rate: float = 0.0, periods_per_year: int = 365*24*60) -> float:
+    def calculate_portfolio_metrics(snapshots: List[PortfolioSnapshot], risk_free_rate: float = 0.0) -> Dict[str, float]:
         """
-        Calcule le ratio de Sharpe (Rendement excédentaire / Volatilité).
+        Calcule les métriques globales basées sur la courbe d'équité (Time-Weighted).
         
         Args:
-            portfolio_history: Liste de dicts avec clé 'value'
-            risk_free_rate: Taux sans risque annuel (par défaut 0)
-            periods_per_year: Facteur d'annualisation (par défaut minutes -> annuel)
+            snapshots: Liste chronologique de PortfolioSnapshot.
         """
-        if not portfolio_history or len(portfolio_history) < 2:
-            return 0.0
+        if not snapshots or len(snapshots) < 2:
+            return FinancialMetrics._empty_portfolio_metrics()
+
+        # 1. Extraction Vectorisée (Fail-fast si attribut manquant)
+        equity_curve = pd.Series(
+            data=[s.total_equity for s in snapshots],
+            index=pd.to_datetime([s.timestamp for s in snapshots])
+        )
         
-        try:
-            values = [p.get('value', 0) for p in portfolio_history if 'value' in p]
-            returns = pd.Series(values).pct_change().dropna()
-            
-            if returns.std() == 0:
-                return 0.0
-            
-            # Ajustement du taux sans risque pour la période (minute)
-            rf_per_period = risk_free_rate / periods_per_year
-            
-            excess_returns = returns - rf_per_period
-            sharpe = excess_returns.mean() / returns.std()
-            
-            # Annualisation (Racine carrée du temps)
-            annualized_sharpe = sharpe * np.sqrt(periods_per_year)
-            return annualized_sharpe
-            
-        except Exception:
-            return 0.0
-
-    @staticmethod
-    def calculate_sortino_ratio(portfolio_history: List[Dict], target_return: float = 0.0, periods_per_year: int = 365*24*60) -> float:
-        """
-        Calcule le ratio de Sortino.
-        Similaire au Sharpe, mais ne pénalise que la volatilité NÉGATIVE (Downside deviation).
-        C'est souvent plus pertinent pour les cryptos.
-        """
-        if not portfolio_history or len(portfolio_history) < 2:
-            return 0.0
+        # Nettoyage et tri
+        equity_curve = equity_curve.sort_index()
         
-        try:
-            values = [p.get('value', 0) for p in portfolio_history if 'value' in p]
-            returns = pd.Series(values).pct_change().dropna()
-            
-            # On ne garde que les rendements inférieurs à la cible (les "mauvais" mouvements)
-            downside_returns = returns[returns < target_return]
-            
-            if downside_returns.empty or downside_returns.std() == 0:
-                # Si aucune perte, le ratio est théoriquement infini -> on cap à une valeur haute
-                return 10.0 if returns.mean() > 0 else 0.0
-            
-            expected_return = returns.mean()
-            sortino = (expected_return - target_return) / downside_returns.std()
-            
-            # Annualisation
-            return sortino * np.sqrt(periods_per_year)
-            
-        except Exception:
-            return 0.0
-
-    @staticmethod
-    def calculate_total_value(portfolio: List[Dict], strategies: Dict = None) -> float:
-        """
-        Calcule la valeur totale estimée des positions en cours.
-        Utilisé par main.py pour le suivi de performance.
-        """
-        total_value = 0.0
+        # 2. Calcul des variations
+        initial_equity = equity_curve.iloc[0]
+        final_equity = equity_curve.iloc[-1]
         
-        if not portfolio:
-            return 0.0
-
-        for position in portfolio:
-            # Récupération sécurisée de la quantité et du prix
-            qty = float(position.get('quantity', 0.0))
-            
-            # On essaie de prendre le 'current_price' (prix actuel) s'il a été mis à jour,
-            # sinon on se rabat sur 'entry_price' ou 'price'
-            price = float(position.get('current_price', position.get('entry_price', position.get('price', 0.0))))
-            
-            total_value += qty * price
-            
-        return total_value
-
-    @staticmethod
-    def calculate_max_drawdown(values: List[float]) -> float:
-        """
-        Calcule la perte maximale historique (Max Drawdown) depuis un sommet.
-        Retourne une valeur positive (ex: 0.20 pour -20%).
-        """
-        if not values or len(values) < 2:
-            return 0.0
+        # Returns (variations relatives)
+        returns = equity_curve.pct_change().dropna()
         
-        try:
-            np_values = np.array(values)
-            # Maximum cumulatif jusqu'à chaque point
-            peak = np.maximum.accumulate(np_values)
-            
-            # Drawdown à chaque point (Valeur actuelle / Pic précédent - 1)
-            drawdowns = (np_values - peak) / peak
-            
-            # Le Max Drawdown est le minimum (le plus négatif) de cette série
-            return abs(np.min(drawdowns))
-            
-        except Exception:
-            return 0.0
+        if returns.empty:
+            return FinancialMetrics._empty_portfolio_metrics()
 
-    @staticmethod
-    def calculate_calmar_ratio(total_return: float, max_drawdown: float) -> float:
-        """
-        Calcule le ratio Calmar (Rendement Total / Max Drawdown).
-        Indique si le rendement vaut le risque de crash encouru.
-        """
-        if max_drawdown == 0:
-            return 0.0 if total_return <= 0 else 20.0 # Cap de sécurité
-        return total_return / max_drawdown
-
-    @staticmethod
-    def calculate_ulcer_index(values: List[float]) -> float:
-        """
-        Calcule l'Ulcer Index.
-        Mesure le stress de l'investisseur (prend en compte la profondeur ET la durée des baisses).
-        """
-        if not values or len(values) < 2:
-            return 0.0
+        # 3. Calculs Mathématiques
+        total_return = (final_equity - initial_equity) / initial_equity
         
-        try:
-            np_values = np.array(values)
-            peak = np.maximum.accumulate(np_values)
-            drawdowns = (np_values - peak) / peak
-            
-            # Moyenne quadratique des drawdowns
-            squared_drawdowns = drawdowns ** 2
-            return np.sqrt(squared_drawdowns.mean())
-        except Exception:
-            return 0.0
+        # Max Drawdown
+        drawdown_series = FinancialMetrics._compute_drawdown_series(equity_curve)
+        max_drawdown = drawdown_series.min()  # Valeur négative (ex: -0.15)
 
-    @staticmethod
-    def calculate_win_rate(trade_log: List[Dict]) -> float:
-        """Calcule le pourcentage de trades gagnants (0.0 à 1.0)"""
-        if not trade_log:
-            return 0.0
+        # Ratios (Annualisation approximative basée sur la fréquence des snapshots)
+        # On suppose ici des snapshots haute fréquence, on normalise via std dev
+        sharpe = FinancialMetrics._compute_sharpe_ratio(returns, risk_free_rate)
+        sortino = FinancialMetrics._compute_sortino_ratio(returns, risk_free_rate)
+        calmar = FinancialMetrics._compute_calmar_ratio(total_return, max_drawdown)
         
-        winning_trades = [t for t in trade_log if t.get('pnl', 0) > 0]
-        return len(winning_trades) / len(trade_log)
+        volatility = returns.std()
 
-    @staticmethod
-    def get_comprehensive_stats(portfolio_history: List[Dict], trade_log: List[Dict]) -> Dict:
-        """
-        Génère un rapport statistique complet.
-        Utilisé par le bot en fin de session et par le dashboard.
-        """
-        if not portfolio_history:
-            return {
-                'total_return': 0.0,
-                'max_drawdown': 0.0,
-                'sharpe_ratio': 0.0,
-                'total_trades': 0
-            }
-
-        values = [p.get('value', 0) for p in portfolio_history if 'value' in p]
-        if not values: 
-            return {}
-
-        initial_value = values[0]
-        final_value = values[-1]
-        
-        # Rendement absolu
-        total_return = (final_value - initial_value) / initial_value if initial_value > 0 else 0
-        
-        # Calculs de risque
-        max_dd = FinancialMetrics.calculate_max_drawdown(values)
-        sharpe = FinancialMetrics.calculate_sharpe_ratio(portfolio_history)
-        sortino = FinancialMetrics.calculate_sortino_ratio(portfolio_history)
-        
-        # Calculs de trading
-        win_rate = FinancialMetrics.calculate_win_rate(trade_log)
-        avg_profit = np.mean([t['pnl'] for t in trade_log]) if trade_log else 0.0
-
-        stats = {
-            'initial_capital': initial_value,
-            'final_capital': final_value,
-            'net_profit': final_value - initial_value,
-            'total_return': total_return,
-            'max_drawdown': max_dd,
-            'sharpe_ratio': sharpe,
-            'sortino_ratio': sortino,
-            'calmar_ratio': FinancialMetrics.calculate_calmar_ratio(total_return, max_dd),
-            'ulcer_index': FinancialMetrics.calculate_ulcer_index(values),
-            'win_rate': win_rate,
-            'total_trades': len(trade_log),
-            'average_profit_per_trade': avg_profit
+        return {
+            "initial_equity": initial_equity,
+            "final_equity": final_equity,
+            "net_profit": final_equity - initial_equity,
+            "total_return_pct": total_return,
+            "max_drawdown_pct": max_drawdown,
+            "sharpe_ratio": sharpe,
+            "sortino_ratio": sortino,
+            "calmar_ratio": calmar,
+            "volatility": volatility
         }
-        return stats
+
+    @staticmethod
+    def calculate_trade_metrics(trades: List[CompletedTrade]) -> Dict[str, float]:
+        """
+        Calcule les métriques basées sur les trades (Trade-Weighted).
+        """
+        if not trades:
+            return FinancialMetrics._empty_trade_metrics()
+
+        # 1. Extraction Vectorisée
+        # Ici on accède directement aux attributs .pnl, .return_pct
+        pnls = np.array([t.pnl for t in trades])
+        returns = np.array([t.return_pct for t in trades])
+        
+        total_trades = len(trades)
+        winning_trades = pnls[pnls > 0]
+        losing_trades = pnls[pnls <= 0]
+        
+        n_wins = len(winning_trades)
+        n_losses = len(losing_trades)
+        
+        # 2. Win Rate
+        win_rate = n_wins / total_trades if total_trades > 0 else 0.0
+        
+        # 3. Profit Factor
+        gross_profit = winning_trades.sum() if n_wins > 0 else 0.0
+        gross_loss = abs(losing_trades.sum()) if n_losses > 0 else 0.0
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 0.0
+        
+        # 4. Averages
+        avg_pnl = pnls.mean()
+        avg_win = winning_trades.mean() if n_wins > 0 else 0.0
+        avg_loss = losing_trades.mean() if n_losses > 0 else 0.0
+
+        # 5. Expectancy (Espérance mathématique par trade)
+        # Formule : (WinRate * AvgWin) - (LossRate * AvgLoss)
+        loss_rate = 1.0 - win_rate
+        # AvgLoss est négatif ici, donc on l'ajoute ou on le soustrait selon convention.
+        # Ici avg_loss est signé négatif.
+        expectancy = (win_rate * avg_win) + (loss_rate * avg_loss)
+
+        return {
+            "total_trades": total_trades,
+            "win_rate": win_rate,
+            "profit_factor": profit_factor,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
+            "avg_pnl": avg_pnl,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "expectancy": expectancy,
+            "best_trade": pnls.max(),
+            "worst_trade": pnls.min()
+        }
+
+    # ==========================================================================
+    # MÉTHODES MATHÉMATIQUES INTERNES (VECTORISÉES)
+    # ==========================================================================
+
+    @staticmethod
+    def _compute_drawdown_series(equity_curve: pd.Series) -> pd.Series:
+        """Calcule la série de Drawdown (en négatif)."""
+        rolling_max = equity_curve.cummax()
+        drawdown = (equity_curve - rolling_max) / rolling_max
+        return drawdown
+
+    @staticmethod
+    def _compute_sharpe_ratio(returns: pd.Series, risk_free: float) -> float:
+        """Ratio de Sharpe simplifié (sans annualisation complexe pour rester neutre)."""
+        if returns.empty or returns.std() == 0:
+            return 0.0
+        excess_returns = returns - risk_free
+        return excess_returns.mean() / returns.std()
+
+    @staticmethod
+    def _compute_sortino_ratio(returns: pd.Series, risk_free: float) -> float:
+        """Ratio de Sortino (ne pénalise que la volatilité négative)."""
+        if returns.empty:
+            return 0.0
+        excess_returns = returns - risk_free
+        downside_returns = excess_returns[excess_returns < 0]
+        
+        if downside_returns.empty or downside_returns.std() == 0:
+            return 0.0 if excess_returns.mean() <= 0 else 100.0 # Valeur arbitraire haute si aucun risque baissier
+            
+        downside_deviation = downside_returns.std()
+        return excess_returns.mean() / downside_deviation
+
+    @staticmethod
+    def _compute_calmar_ratio(total_return: float, max_drawdown: float) -> float:
+        """Ratio de Calmar (Retour total / Max Drawdown absolu)."""
+        if max_drawdown == 0:
+            return 0.0
+        return total_return / abs(max_drawdown)
+
+    # ==========================================================================
+    # VALEURS PAR DÉFAUT
+    # ==========================================================================
+
+    @staticmethod
+    def _empty_portfolio_metrics() -> Dict[str, float]:
+        return {
+            "initial_equity": 0.0, "final_equity": 0.0, "net_profit": 0.0,
+            "total_return_pct": 0.0, "max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0, "sortino_ratio": 0.0, "calmar_ratio": 0.0,
+            "volatility": 0.0
+        }
+
+    @staticmethod
+    def _empty_trade_metrics() -> Dict[str, float]:
+        return {
+            "total_trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+            "gross_profit": 0.0, "gross_loss": 0.0, "avg_pnl": 0.0,
+            "expectancy": 0.0, "best_trade": 0.0, "worst_trade": 0.0
+        }
