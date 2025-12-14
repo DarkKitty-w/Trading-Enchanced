@@ -1,298 +1,246 @@
 import os
+import logging
 import pandas as pd
-import numpy as np
+from typing import Dict, List, Any, Optional
+
+# Configuration Matplotlib pour environnement Headless (Serveurs/Docker)
+# Doit être fait AVANT d'importer pyplot
 import matplotlib
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
+import matplotlib.dates as mdates
+
+# Plotly pour l'interactif
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import Dict, List, Any
-import logging
-
-# --- CONFIGURATION CRITIQUE ---
-# Force Matplotlib à ne pas utiliser de fenêtre graphique (X11/Tkinter)
-# Indispensable pour que ça marche sur GitHub Actions / Serveurs
-matplotlib.use('Agg')
 
 logger = logging.getLogger("PhoenixAnalytics")
 
-class AdvancedChartGenerator:
+class AnalyticsVisualizer:
     """
-    Générateur de rapports graphiques Haute Performance.
-    Génère :
-    1. Un rapport Statique (PNG) pour l'archivage/email.
-    2. Un rapport Interactif (HTML) optimisé pour le Web.
-    """
+    Moteur de visualisation PURE.
     
-    def __init__(self, output_dir="portfolio_logs_phoenix"):
+    Principes :
+    1. AUCUN calcul financier (pas de pct_change, pas de cummax).
+    2. Reçoit des métriques prêtes à l'emploi (provenant de metrics.py).
+    3. Utilise l'API Orientée Objet de Matplotlib pour éviter les effets de bord.
+    """
+
+    def __init__(self, output_dir: str = "portfolio_logs_phoenix"):
         self.output_dir = output_dir
-        # Création du dossier charts s'il n'existe pas
-        os.makedirs(os.path.join(self.output_dir, "charts"), exist_ok=True)
-        self.setup_style()
+        self.charts_dir = os.path.join(self.output_dir, "charts")
+        os.makedirs(self.charts_dir, exist_ok=True)
         
-    def setup_style(self):
-        """Configuration des couleurs et du style"""
+        # Style visuel cohérent
+        self.colors = {
+            'primary': '#1f77b4',  # Bleu
+            'secondary': '#ff7f0e', # Orange
+            'success': '#2ca02c',   # Vert
+            'danger': '#d62728',    # Rouge
+            'neutral': '#7f7f7f',   # Gris
+            'grid': '#e6e6e6'
+        }
+
+    def generate_static_report(
+        self, 
+        equity_curve: pd.Series, 
+        drawdown_curve: pd.Series, 
+        benchmark_curve: Optional[pd.Series] = None,
+        daily_returns: Optional[pd.Series] = None,
+        filename: str = "performance_summary.png"
+    ) -> str:
+        """
+        Génère une image statique résumant la performance.
+        Attend des Séries temporelles alignées et pré-calculées.
+        """
+        if equity_curve.empty:
+            logger.warning("Courbe d'équité vide, pas de graphique généré.")
+            return ""
+
+        # Création de la Figure en mode OO (pas de plt.figure global)
+        fig = plt.figure(figsize=(12, 10), constrained_layout=True)
+        gs = fig.add_gridspec(3, 1, height_ratios=[3, 1, 1])
+
+        # 1. Equity Curve
+        ax1 = fig.add_subplot(gs[0])
+        ax1.plot(equity_curve.index, equity_curve.values, label='Stratégie', color=self.colors['primary'], linewidth=1.5)
+        
+        if benchmark_curve is not None and not benchmark_curve.empty:
+            # On s'assure que le benchmark est aligné temporellement
+            ax1.plot(benchmark_curve.index, benchmark_curve.values, label='Benchmark', color=self.colors['neutral'], linestyle='--', alpha=0.7)
+            
+        ax1.set_title("Évolution du Capital (Equity)", fontsize=12, fontweight='bold')
+        ax1.set_ylabel("Capital ($)")
+        ax1.legend(loc='upper left')
+        ax1.grid(True, color=self.colors['grid'], linestyle='--')
+
+        # 2. Drawdown (Doit être fourni en négatif ou positif selon convention, ici on affiche tel quel)
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)
+        ax2.fill_between(drawdown_curve.index, drawdown_curve.values, 0, color=self.colors['danger'], alpha=0.3, label='Drawdown')
+        ax2.plot(drawdown_curve.index, drawdown_curve.values, color=self.colors['danger'], linewidth=1)
+        ax2.set_title("Drawdown", fontsize=10)
+        ax2.set_ylabel("%")
+        ax2.grid(True, color=self.colors['grid'], linestyle=':')
+
+        # 3. Daily Returns (Histogramme ou Barplot)
+        ax3 = fig.add_subplot(gs[2])
+        if daily_returns is not None and not daily_returns.empty:
+            ax3.bar(daily_returns.index, daily_returns.values, color=self.colors['secondary'], width=0.8, alpha=0.8)
+            ax3.set_title("Rendements Quotidiens", fontsize=10)
+            ax3.set_ylabel("%")
+            ax3.axhline(0, color='black', linewidth=0.5)
+        else:
+            ax3.text(0.5, 0.5, "Données Returns manquantes", ha='center')
+
+        # Formatage des dates sur l'axe X (commun)
+        fig.autofmt_xdate()
+        
+        # Sauvegarde
+        output_path = os.path.join(self.charts_dir, filename)
         try:
-            plt.style.use('seaborn-v0_8-darkgrid')
-        except OSError:
-            plt.style.use('ggplot') 
-            
-        # Palette de couleurs "Phoenix"
-        self.palette = [
-            '#2E86AB', # Bleu
-            '#A23B72', # Magenta
-            '#18A558', # Vert
-            '#F24236', # Rouge
-            '#F5B700', # Jaune
-            '#4FB0C6', # Cyan
-            '#6A4C93', # Violet
-            '#FF6B6B', # Saumon
-        ]
-
-    def _downsample_data(self, data: List[Dict], target_points: int = 1000) -> pd.DataFrame:
-        """
-        OPTIMISATION : Réduit le nombre de points pour l'affichage Web.
-        Transforme une liste de dicts en DataFrame allégé.
-        """
-        if not data:
-            return pd.DataFrame()
-            
-        df = pd.DataFrame(data)
-        
-        # Conversion Timestamp
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
-        # Si peu de données, on renvoie tout
-        if len(df) <= target_points:
-            return df
-            
-        # Sinon on garde 1 point tous les N (Slicing)
-        # C'est beaucoup plus rapide que le resample() statistique
-        factor = len(df) // target_points
-        return df.iloc[::factor].copy()
-
-    def create_comprehensive_dashboard(self, all_results: Dict[str, Any]):
-        """
-        Point d'entrée principal.
-        Génère les deux versions du dashboard.
-        """
-        if not all_results:
-            logger.warning("⚠️ Pas de données pour générer les graphiques.")
-            return
-
-        # 1. Version PNG (Statique, Haute Résolution)
-        png_path = self._generate_static_png(all_results)
-        
-        # 2. Version HTML (Interactive, Légère)
-        html_path = self._generate_interactive_html(all_results)
-        
-        return png_path, html_path
-
-    def _generate_static_png(self, all_results):
-        """Génère l'image statique via Matplotlib"""
-        try:
-            fig = plt.figure(figsize=(20, 15))
-            # Grille : 4 rangées, 2 colonnes
-            gs = GridSpec(4, 2, figure=fig, hspace=0.3, wspace=0.2)
-            
-            # A. Performance (Bar Chart)
-            ax1 = fig.add_subplot(gs[0, :])
-            self._plot_mpl_performance(ax1, all_results)
-            
-            # B. Évolution Portefeuille (Line Chart)
-            ax2 = fig.add_subplot(gs[1, :])
-            self._plot_mpl_evolution(ax2, all_results)
-            
-            # C. Drawdowns (Area Chart)
-            ax3 = fig.add_subplot(gs[2, 0])
-            self._plot_mpl_drawdown(ax3, all_results)
-            
-            # D. Distribution (Box Plot)
-            ax4 = fig.add_subplot(gs[2, 1])
-            self._plot_mpl_distribution(ax4, all_results)
-            
-            # E. Risk/Reward (Scatter)
-            ax5 = fig.add_subplot(gs[3, :])
-            self._plot_mpl_risk_reward(ax5, all_results)
-            
-            # Titre & Save
-            plt.suptitle('PHOENIX TRADING REPORT', fontsize=20, fontweight='bold', y=0.92)
-            filename = os.path.join(self.output_dir, "charts", "phoenix_report.png")
-            plt.savefig(filename, dpi=100, bbox_inches='tight')
-            plt.close()
-            return filename
-            
+            fig.savefig(output_path, dpi=150, bbox_inches='tight')
+            logger.info(f"📊 Rapport statique généré : {output_path}")
         except Exception as e:
-            logger.error(f"❌ Erreur PNG: {e}")
-            return None
-
-    def _generate_interactive_html(self, all_results):
-        """Génère le dashboard interactif Plotly (Optimisé WebGL)"""
-        try:
-            strategies = list(all_results.keys())
+            logger.error(f"❌ Erreur lors de la sauvegarde du graphique : {e}")
+        finally:
+            # NETTOYAGE CRITIQUE : Fermer explicitement la figure pour libérer la RAM
+            plt.close(fig)
             
-            fig = make_subplots(
-                rows=3, cols=2,
-                specs=[[{'type': 'xy'}, {'type': 'xy'}],      # Bar / Line
-                       [{'type': 'xy'}, {'type': 'polar'}],   # Drawdown / Radar
-                       [{'type': 'box'}, {'type': 'xy'}]],    # Box / Scatter
-                subplot_titles=(
-                    'Rendement Total (%)', 'Évolution Capital (Optimisé)',
-                    'Drawdowns', 'Profil de Risque',
-                    'Distribution des Gains', 'Frontière Efficiente'
-                ),
-                vertical_spacing=0.1
-            )
+        return output_path
 
-            for i, strat in enumerate(strategies):
-                res = all_results[strat].get('results', {})
-                hist = all_results[strat].get('portfolio_history', [])
-                color = self.palette[i % len(self.palette)]
-                
-                # --- 1. Bar Chart (Simple) ---
-                fig.add_trace(go.Bar(
-                    name=strat, x=[strat], y=[res.get('Return', 0) * 100], # En %
-                    marker_color=color, showlegend=False
-                ), row=1, col=1)
+    def generate_interactive_chart(
+        self, 
+        ohlcv_df: pd.DataFrame, 
+        trades: List[Dict[str, Any]], 
+        indicators: Dict[str, pd.Series] = {},
+        filename: str = "interactive_chart.html"
+    ) -> str:
+        """
+        Génère un graphique interactif Plotly.
+        Séparé de toute logique de calcul d'indicateurs.
+        """
+        if ohlcv_df.empty:
+            return ""
 
-                # --- 2. Line Chart (OPTIMISÉ SCATTERGL) ---
-                # On downsample pour ne pas tuer le navigateur
-                df_light = self._downsample_data(hist, target_points=800)
-                if not df_light.empty:
-                    fig.add_trace(go.Scattergl(
-                        x=df_light['timestamp'], y=df_light['value'],
-                        name=strat, mode='lines',
-                        line=dict(color=color, width=2)
-                    ), row=1, col=2)
+        # Création des subplots (Prix + Volume)
+        fig = make_subplots(
+            rows=2, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.05, 
+            row_heights=[0.7, 0.3]
+        )
 
-                # --- 3. Drawdown Area (Optimisé) ---
-                if not df_light.empty:
-                    vals = df_light['value'].values
-                    peak = np.maximum.accumulate(vals)
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        dd = (vals - peak) / peak * 100
-                        dd = np.nan_to_num(dd)
-                    
-                    fig.add_trace(go.Scattergl(
-                        x=df_light['timestamp'], y=dd,
-                        name=f"DD {strat}",
-                        line=dict(color=color, width=1),
-                        fill='tozeroy'
-                    ), row=2, col=1)
+        # 1. Chandeliers
+        fig.add_trace(go.Candlestick(
+            x=ohlcv_df.index,
+            open=ohlcv_df['open'],
+            high=ohlcv_df['high'],
+            low=ohlcv_df['low'],
+            close=ohlcv_df['close'],
+            name='Prix'
+        ), row=1, col=1)
 
-                # --- 4. Radar Chart ---
-                metrics = ['Sharpe Ratio', 'Sortino Ratio', 'Win Rate', 'Calmar Ratio']
-                # Normalisation sommaire pour l'affichage (éviter les échelles écrasées)
-                vals = [
-                    max(res.get('Sharpe Ratio', 0), 0),
-                    max(res.get('Sortino Ratio', 0), 0),
-                    res.get('Win Rate', 0) * 5,  # Boost visuel pour le Winrate
-                    min(max(res.get('Calmar Ratio', 0), 0), 5) # Cap à 5
-                ]
-                vals += vals[:1] # Fermer la boucle
-                
-                fig.add_trace(go.Scatterpolar(
-                    r=vals, theta=metrics + [metrics[0]],
-                    fill='toself', name=strat,
-                    line=dict(color=color), showlegend=False
-                ), row=2, col=2)
-
-                # --- 5. Box Plot (Distribution) ---
-                # On utilise un peu plus de points pour la distribution
-                df_dist = self._downsample_data(hist, target_points=2000)
-                if not df_dist.empty:
-                    rets = df_dist['value'].pct_change().dropna() * 100
-                    fig.add_trace(go.Box(
-                        y=rets, name=strat, marker_color=color, showlegend=False
-                    ), row=3, col=1)
-
-                # --- 6. Scatter (Risk/Reward) ---
-                ret = res.get('Return', 0) * 100
-                sharpe = res.get('Sharpe Ratio', 0)
-                # Volatilité estimée via Sharpe (Vol = Ret / Sharpe)
-                vol = (ret / sharpe) if sharpe > 0.1 else 0
-                
+        # 2. Indicateurs Techniques (Doivent être passés déjà calculés)
+        colors = ['blue', 'orange', 'purple', 'brown']
+        idx = 0
+        for name, series in indicators.items():
+            if series is not None and not series.empty:
+                # Aligner la série avec l'index OHLCV si nécessaire
+                series = series.reindex(ohlcv_df.index)
                 fig.add_trace(go.Scatter(
-                    x=[vol], y=[ret], mode='markers+text',
-                    text=[strat], name=strat, textposition="top center",
-                    marker=dict(size=12, color=color)
-                ), row=3, col=2)
+                    x=series.index, 
+                    y=series.values, 
+                    mode='lines', 
+                    name=name,
+                    line=dict(width=1, color=colors[idx % len(colors)])
+                ), row=1, col=1)
+                idx += 1
 
-            # Mise en page sombre
-            fig.update_layout(
-                height=1000, 
-                title_text="PHOENIX INTERACTIVE DASHBOARD", 
-                template="plotly_dark",
-                margin=dict(l=20, r=20, t=60, b=20)
-            )
+        # 3. Marqueurs de Trades
+        # On sépare les achats et les ventes pour le style
+        buys_x, buys_y = [], []
+        sells_x, sells_y = [], []
+        
+        for trade in trades:
+            # On suppose que 'timestamp' est une string ISO ou datetime
+            t_date = pd.to_datetime(trade.get('timestamp'))
+            price = trade.get('price')
             
-            filename = os.path.join(self.output_dir, "charts", "phoenix_interactive.html")
-            fig.write_html(filename)
-            logger.info(f"🌐 HTML généré : {filename}")
-            return filename
+            if trade.get('side') == 'BUY':
+                buys_x.append(t_date)
+                buys_y.append(price)
+            elif trade.get('side') == 'SELL':
+                sells_x.append(t_date)
+                sells_y.append(price)
 
+        if buys_x:
+            fig.add_trace(go.Scatter(
+                x=buys_x, y=buys_y,
+                mode='markers',
+                marker=dict(symbol='triangle-up', size=10, color='green'),
+                name='Achat'
+            ), row=1, col=1)
+            
+        if sells_x:
+            fig.add_trace(go.Scatter(
+                x=sells_x, y=sells_y,
+                mode='markers',
+                marker=dict(symbol='triangle-down', size=10, color='red'),
+                name='Vente'
+            ), row=1, col=1)
+
+        # 4. Volume
+        fig.add_trace(go.Bar(
+            x=ohlcv_df.index,
+            y=ohlcv_df['volume'],
+            name='Volume',
+            marker_color='rgba(100, 100, 100, 0.5)'
+        ), row=2, col=1)
+
+        # Layout
+        fig.update_layout(
+            title="Analyse Détaillée - Phoenix Bot",
+            yaxis_title="Prix",
+            xaxis_rangeslider_visible=False,
+            height=800,
+            template="plotly_dark"
+        )
+
+        output_path = os.path.join(self.charts_dir, filename)
+        try:
+            fig.write_html(output_path)
+            logger.info(f"🌐 Graphique interactif généré : {output_path}")
         except Exception as e:
-            logger.error(f"❌ Erreur HTML: {e}")
-            return None
+            logger.error(f"❌ Erreur sauvegarde Plotly : {e}")
 
-    # --- MÉTHODES MATPLOTLIB (INTERNES) ---
-    
-    def _plot_mpl_performance(self, ax, results):
-        names = list(results.keys())
-        vals = [results[n]['results'].get('Return', 0) * 100 for n in names]
-        colors = [self.palette[i % len(self.palette)] for i in range(len(names))]
-        ax.bar(names, vals, color=colors)
-        ax.set_title('Rendement Total (%)')
-        ax.grid(True, alpha=0.3)
+        return output_path
 
-    def _plot_mpl_evolution(self, ax, results):
-        for i, (name, data) in enumerate(results.items()):
-            hist = data.get('portfolio_history', [])
-            if hist:
-                vals = [x['value'] for x in hist]
-                ax.plot(vals, label=name, color=self.palette[i % len(self.palette)], linewidth=2)
-        ax.set_title('Évolution du Capital')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-    def _plot_mpl_drawdown(self, ax, results):
-        for i, (name, data) in enumerate(results.items()):
-            hist = data.get('portfolio_history', [])
-            if hist:
-                vals = np.array([x['value'] for x in hist])
-                peak = np.maximum.accumulate(vals)
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    dd = (vals - peak) / peak * 100
-                ax.plot(dd, color=self.palette[i % len(self.palette)], alpha=0.8)
-        ax.set_title('Drawdowns (%)')
-        ax.grid(True, alpha=0.3)
-
-    def _plot_mpl_distribution(self, ax, results):
-        data_to_plot = []
-        labels = []
-        for name, data in results.items():
-            hist = data.get('portfolio_history', [])
-            if hist:
-                vals = pd.Series([x['value'] for x in hist])
-                rets = vals.pct_change().dropna() * 100
-                data_to_plot.append(rets)
-                labels.append(name)
-        if data_to_plot:
-            ax.boxplot(data_to_plot, labels=labels)
-        ax.set_title('Distribution des Rendements')
-
-    def _plot_mpl_risk_reward(self, ax, results):
-        for i, (name, data) in enumerate(results.items()):
-            res = data.get('results', {})
-            ret = res.get('Return', 0) * 100
-            sharpe = res.get('Sharpe Ratio', 0)
-            vol = (ret / sharpe) if sharpe > 0.1 else 0
+    def generate_metrics_heatmap(self, correlation_matrix: pd.DataFrame, filename: str = "correlations.png") -> str:
+        """
+        Visualise une matrice de corrélation (pure visualization).
+        """
+        if correlation_matrix.empty:
+            return ""
             
-            ax.scatter(vol, ret, s=100, label=name, color=self.palette[i % len(self.palette)])
-            ax.text(vol, ret+0.2, name, fontsize=9, ha='center')
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111)
+        
+        cax = ax.matshow(correlation_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+        fig.colorbar(cax)
+        
+        # Labels
+        ticks = range(len(correlation_matrix.columns))
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        ax.set_xticklabels(correlation_matrix.columns, rotation=45, ha='left')
+        ax.set_yticklabels(correlation_matrix.columns)
+        
+        ax.set_title("Corrélation entre Actifs/Stratégies")
+        
+        output_path = os.path.join(self.charts_dir, filename)
+        try:
+            fig.savefig(output_path, bbox_inches='tight')
+        finally:
+            plt.close(fig)
             
-        ax.set_xlabel('Volatilité (Risque)')
-        ax.set_ylabel('Rendement (%)')
-        ax.set_title('Frontière Efficiente')
-        ax.grid(True, alpha=0.3)
+        return output_path
