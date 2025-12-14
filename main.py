@@ -1,321 +1,407 @@
-import os
-import time
-import json
-import logging
 import asyncio
-import aiohttp
-import pandas as pd
+import logging
+import signal
+import json
+import os
+from typing import Dict, List, Optional
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+
+# Imports Tiers
+import ccxt.async_support as ccxt
 from dotenv import load_dotenv
 
-# Chargement immédiat des variables d'environnement (.env)
-load_dotenv()
-
-# --- IMPORTS DES MODULES PHOENIX ---
+# Imports Projet (Architecture Propre)
+from models import (
+    Portfolio, 
+    Position, 
+    MarketCandle, 
+    Signal, 
+    SignalType, 
+    Trade,
+    PortfolioItem,  # AJOUT: Import manquant
+    TradeRecord     # AJOUT: Import manquant
+)
+from market_data import MarketDataManager
 from database import DatabaseHandler
-# from execution import ExecutionManager # On gère l'exécution en interne pour plus de sécurité
-from strategies import get_active_strategies
+from execution import ExecutionManager
 from analytics import AdvancedChartGenerator
-from metrics import FinancialMetrics
+import strategies  # Module dynamique
 
-# --- CONFIGURATION LOGGING ---
+# Configuration Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("phoenix_bot.log"),
+        logging.FileHandler("phoenix_core.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("PhoenixMain")
-
-# --- CHARGEMENT DE LA CONFIGURATION ---
-CONFIG_PATH = "config.json"
-try:
-    with open(CONFIG_PATH, 'r') as f:
-        CONFIG = json.load(f)
-    logger.info(f"✅ Configuration chargée depuis {CONFIG_PATH}")
-except FileNotFoundError:
-    logger.error(f"❌ Fichier de configuration {CONFIG_PATH} introuvable")
-    CONFIG = {}
-    exit(1)
-
-# --- MAPPING COINLORE (Symbol -> ID) ---
-COINLORE_IDS = {
-    "BTC/USDT": "90", "ETH/USDT": "80", "SOL/USDT": "48543", 
-    "BNB/USDT": "2710", "XRP/USDT": "58", "ADA/USDT": "257", 
-    "DOGE/USDT": "2", "MATIC/USDT": "33536", "LTC/USDT": "1"
-}
+logger = logging.getLogger("PhoenixOrchestrator")
 
 class PhoenixBot:
-    def __init__(self):
-        self.config = CONFIG
+    """
+    Contrôleur Principal (Orchestrator).
+    
+    Responsabilités :
+    1. Initialiser les services (Data, DB, Exec, Stratégies).
+    2. Boucle d'événements (Tick).
+    3. Router les données : Exchange -> MarketData -> Strategy -> Execution -> DB.
+    
+    Ne contient AUCUNE logique de calcul financier ou statistique.
+    """
+
+    def __init__(self, config_path: str = "config.json"):
+        load_dotenv()
+        self.is_running = False
+        self.config = self._load_config(config_path)
         
-        # Initialisation des modules
+        # --- 1. Injection des Services ---
+        
+        # Base de données (Persistance)
         self.db = DatabaseHandler()
-        # self.executor = ExecutionManager(self.config) # Désactivé pour utiliser la logique interne
-        self.analytics = AdvancedChartGenerator()
         
-        # Chargement des stratégies
-        strategies_list = get_active_strategies(self.config)
-        if isinstance(strategies_list, list):
-            self.strategies = {s.__class__.__name__: s for s in strategies_list}
-        else:
-            self.strategies = strategies_list
+        # Gestionnaire de Données Marché (Mémoire Tampon)
+        # Remplace la logique pd.concat lourde
+        self.market_data = MarketDataManager(
+            max_history_size=self.config['system'].get('max_history_size', 1000)
+        )
         
-        # Chargement de l'état
-        self.portfolio = self.db.load_portfolio()
-        self.portfolio_history = self.db.load_portfolio_history()
-        self.trades_history = self.db.load_trades_history()
+        # Gestionnaire d'Exécution (Calculs de risque, Ordres)
+        self.execution = ExecutionManager(self.config)
         
-        # Initialisation des capitaux séparés
-        self._initialize_portfolio()
+        # Moteur d'Analyse (Reporting)
+        self.analytics = AdvancedChartGenerator(
+            output_dir=self.config['system'].get('output_dir', 'logs')
+        )
+        
+        # --- 2. État Interne (Modèles Typés) ---
+        
+        # Le Portfolio est la "Source de Vérité" de l'état financier
+        self.portfolio = self._initialize_portfolio()
+        
+        # Stratégies actives (Mappage Nom -> Instance)
+        self.active_strategies = strategies.get_active_strategies(self.config)
+        
+        # Connecteur Exchange (Initié dans setup)
+        self.exchange: Optional[ccxt.Exchange] = None
+        
+        logger.info(f"🤖 Phoenix Bot initialisé avec {len(self.active_strategies)} stratégies.")
 
-    def _initialize_portfolio(self):
-        """
-        Initialise le portefeuille avec du cash USDT séparé pour chaque stratégie.
-        (Correction de l'indentation ici)
-        """
-        initial_capital = self.config.get("trading", {}).get("initial_capital", 1000.0)
-        changes_made = False
-        for strategy_name in self.strategies.keys():
-            # On vérifie si elle a déjà son compte USDT dans le portfolio chargé
-            usdt_found = False
-            for asset in self.portfolio:
-                if asset['symbol'] == "USDT" and asset['strategy'] == strategy_name:
-                    usdt_found = True
-                    break
-            
-            # Si elle n'a pas de compte, on le crée avec le PLEIN MONTANT
-            if not usdt_found:
-                new_cash_entry = {
-                    "symbol": "USDT",
-                    "strategy": strategy_name,
-                    "quantity": initial_capital, # <-- MODIFIÉ : On donne 100% à chacun
-                    "entry_price": 1.0,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-                self.portfolio.append(new_cash_entry)
-                logger.info(f"💰 Cash USDT initialisé pour {strategy_name}: {initial_capital:.2f} USDT")
-                changes_made = True
-
-        # --- FIX: SAUVEGARDE IMMÉDIATE ---
-        # Si on a ajouté de l'argent, on l'écrit tout de suite en BDD
-        if changes_made:
-            try:
-                self.db.save_portfolio(self.portfolio)
-                logger.info("💾 Portefeuille initial (Cash) sauvegardé en base de données.")
-            except Exception as e:
-                logger.error(f"❌ Erreur sauvegarde initiale: {e}")
-
-    async def fetch_market_data(self, symbol: str) -> pd.DataFrame:
-        """Récupère les données via CoinLore (API Gratuite)"""
+    def _load_config(self, path: str) -> dict:
         try:
-            coin_id = COINLORE_IDS.get(symbol)
-            if not coin_id:
-                # logger.error(f"ID non trouvé pour {symbol}")
-                return pd.DataFrame()
-            
-            url = f"https://api.coinlore.net/api/ticker/?id={coin_id}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data:
-                            price = float(data[0]['price_usd'])
-                            # Simulation de bougie OHLC simple
-                            df = pd.DataFrame([{
-                                'close': price,
-                                'high': price * 1.001,
-                                'low': price * 0.999,
-                                'open': price,
-                                'volume': 1000000 
-                            }])
-                            return df
-            return pd.DataFrame()
+            with open(path, 'r') as f:
+                return json.load(f)
         except Exception as e:
-            logger.error(f"Erreur API CoinLore: {e}")
-            return pd.DataFrame()
+            logger.critical(f"❌ Configuration illisible : {e}")
+            raise
 
-    async def _execute_trade_internal(self, symbol: str, signal: Dict, strategy_name: str):
-        """
-        Exécute le trade en gérant STRICTEMENT le budget de la stratégie.
-        Remplace l'ExecutionManager externe pour garantir la séparation des comptes.
-        """
-        side = signal['side']
-        price = float(signal['price'])
+    def _initialize_portfolio(self) -> Portfolio:
+        """Charge l'état depuis la DB ou crée un nouveau portfolio."""
+        try:
+            # Charge les items de portfolio depuis la DB
+            portfolio_items = self.db.load_portfolio()
+            if portfolio_items and len(portfolio_items) > 0:
+                # Reconstruit le portfolio à partir des items
+                return self._load_portfolio_from_items(portfolio_items)
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de charger l'état précédent ({e}). Démarrage à neuf.")
         
-        # Trouver le Cash disponible pour CETTE stratégie
-        usdt_asset = next((p for p in self.portfolio if p['symbol'] == "USDT" and p['strategy'] == strategy_name), None)
+        # Portfolio vierge
+        return Portfolio(
+            initial_capital=self.config['portfolio']['initial_capital_per_strategy'],
+            current_cash=self.config['portfolio']['initial_capital_per_strategy'],
+            currency=self.config['portfolio']['currency']
+        )
+
+    def _load_portfolio_from_items(self, items: List[PortfolioItem]) -> Portfolio:
+        """Reconstruit un objet Portfolio à partir des items de la base de données."""
+        # Trouve l'item le plus récent pour les métadonnées
+        latest_item = max(items, key=lambda x: x.timestamp)
         
-        if not usdt_asset:
-            logger.error(f"❌ Pas de compte USDT trouvé pour {strategy_name}")
+        # Récupère toutes les positions ouvertes
+        positions = []
+        for item in items:
+            if item.position_id and item.status == "OPEN":
+                positions.append(
+                    Position(
+                        symbol=item.symbol,
+                        strategy_name=item.strategy_name,
+                        quantity=item.quantity,
+                        entry_price=item.entry_price,
+                        current_price=item.current_price,
+                        entry_time=item.entry_time
+                    )
+                )
+        
+        # Crée et retourne le portfolio
+        portfolio = Portfolio(
+            initial_capital=latest_item.initial_capital,
+            current_cash=latest_item.current_cash,
+            currency=latest_item.currency,
+            positions=positions
+        )
+        
+        # Restaure l'historique des snapshots si disponible
+        for item in items:
+            if item.snapshot_data:
+                portfolio.history_snapshots.append(item.snapshot_data)
+        
+        return portfolio
+
+    def _convert_portfolio_to_items(self) -> List[PortfolioItem]:
+        """Convertit l'état actuel du portfolio en items pour la base de données."""
+        items = []
+        timestamp = datetime.now(timezone.utc)
+        
+        # Item principal avec l'état global
+        main_item = PortfolioItem(
+            timestamp=timestamp,
+            initial_capital=self.portfolio.initial_capital,
+            current_cash=self.portfolio.current_cash,
+            currency=self.portfolio.currency,
+            total_equity=self.portfolio.total_equity,
+            symbol="GLOBAL",
+            position_id=None,
+            status="SUMMARY"
+        )
+        items.append(main_item)
+        
+        # Items pour chaque position ouverte
+        for pos in self.portfolio.positions:
+            pos_item = PortfolioItem(
+                timestamp=timestamp,
+                initial_capital=self.portfolio.initial_capital,
+                current_cash=self.portfolio.current_cash,
+                currency=self.portfolio.currency,
+                total_equity=self.portfolio.total_equity,
+                symbol=pos.symbol,
+                strategy_name=pos.strategy_name,
+                position_id=id(pos),  # Identifiant unique
+                quantity=pos.quantity,
+                entry_price=pos.entry_price,
+                current_price=pos.current_price,
+                entry_time=pos.entry_time,
+                status="OPEN"
+            )
+            items.append(pos_item)
+        
+        return items
+
+    async def setup(self):
+        """Configuration asynchrone (Connexions API)."""
+        exchange_id = 'binance'  # Configurable
+        exchange_class = getattr(ccxt, exchange_id)
+        
+        self.exchange = exchange_class({
+            'apiKey': os.environ.get('BINANCE_API_KEY'),
+            'secret': os.environ.get('BINANCE_SECRET_KEY'),
+            'timeout': 30000,
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'} 
+        })
+        
+        # Chargement des marchés (nécessaire pour les précisions)
+        await self.exchange.load_markets()
+        logger.info("✅ Connexion Exchange établie.")
+
+    async def shutdown(self):
+        """Arrêt propre."""
+        self.is_running = False
+        if self.exchange:
+            await self.exchange.close()
+        
+        # Sauvegarde finale de l'état
+        if self.portfolio:
+            portfolio_items = self._convert_portfolio_to_items()
+            self.db.save_portfolio(portfolio_items)
+            
+        logger.info("👋 Arrêt complet du système.")
+
+    async def run(self):
+        """Boucle principale (Event Loop)."""
+        await self.setup()
+        self.is_running = True
+        
+        pairs = self.config['trading']['pairs']
+        timeframe = self.config['trading']['timeframe']
+        
+        logger.info(f"🚀 Démarrage de la boucle de trading sur {len(pairs)} paires.")
+        
+        while self.is_running:
+            start_time = datetime.now()
+            
+            # Traitement parallèle des paires avec gestion d'erreurs
+            tasks = []
+            for pair in pairs:
+                task = asyncio.create_task(self._process_pair(pair, timeframe))
+                task.add_done_callback(self._handle_task_exception)
+                tasks.append(task)
+            
+            await asyncio.gather(*tasks)
+            
+            # Synchronisation & Reporting périodique
+            await self._periodic_sync()
+            
+            # Respect du Rate Limit global
+            elapsed = (datetime.now() - start_time).total_seconds()
+            sleep_time = max(1.0, 60.0 - elapsed)  # Attend la prochaine minute environ
+            await asyncio.sleep(sleep_time)
+
+    def _handle_task_exception(self, task: asyncio.Task):
+        """Gère les exceptions des tâches asynchrones."""
+        if task.exception():
+            logger.error(f"❌ Erreur dans tâche asynchrone: {task.exception()}")
+
+    async def _process_pair(self, symbol: str, timeframe: str):
+        """
+        Logique atomique pour une paire.
+        1. Fetch Market Data
+        2. Update Model
+        3. Run Strategies
+        4. Execute Signals
+        """
+        try:
+            # 1. Acquisition de données (IO Bound)
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=100)  # Augmenté pour avoir suffisamment d'historique
+            if not ohlcv or len(ohlcv) < 50:  # Au moins 50 bougies nécessaires
+                logger.debug(f"⏳ Données insuffisantes pour {symbol}")
+                return
+
+            # On prend la dernière bougie clôturée (avant-dernière liste)
+            last_closed = ohlcv[-2] if len(ohlcv) > 1 else ohlcv[-1]
+            current_candle = MarketCandle(
+                timestamp=last_closed[0],
+                symbol=symbol,
+                open=last_closed[1],
+                high=last_closed[2],
+                low=last_closed[3],
+                close=last_closed[4],
+                volume=last_closed[5]
+            )
+
+            # 2. Mise à jour du MarketDataManager
+            self.market_data.add_candle(current_candle)
+            
+            # Mise à jour du prix courant dans le portfolio
+            self.portfolio.update_market_prices({symbol: current_candle.close})
+            
+            # 3. Récupération de l'historique pour les stratégies
+            df_history = self.market_data.get_history_dataframe(symbol, required_rows=50)
+            
+            if df_history is None or df_history.empty:
+                logger.debug(f"⏳ Historique insuffisant pour {symbol}")
+                return
+
+            # 4. Exécution des Stratégies
+            for strategy in self.active_strategies:
+                try:
+                    signal_obj: Signal = strategy.analyze(df_history, self.portfolio)
+                    
+                    if signal_obj.signal_type != SignalType.HOLD:
+                        logger.info(f"💡 Signal détecté: {signal_obj}")
+                        await self._execute_signal(signal_obj, current_candle.close)
+                        
+                except Exception as e:
+                    logger.error(f"⚠️ Erreur stratégie {strategy.name} sur {symbol}: {e}")
+
+        except ccxt.NetworkError as e:
+            logger.warning(f"📡 Erreur réseau sur {symbol}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Erreur critique boucle {symbol}: {e}", exc_info=True)
+
+    async def _execute_signal(self, signal: Signal, current_price: float):
+        """Délègue l'exécution et met à jour le Portfolio."""
+        
+        # 1. Calculs pré-trade
+        execution_plan = self.execution.plan_trade(
+            signal=signal, 
+            portfolio=self.portfolio, 
+            current_price=current_price
+        )
+        
+        if not execution_plan:
             return
 
-        available_cash = usdt_asset['quantity']
-
-        if side == "BUY":
-            # On investit 95% du cash disponible DE LA STRATÉGIE
-            amount_to_invest = available_cash * 0.95
-            
-            if amount_to_invest < 10.0: # Minimum de sécurité
-                return None
-
-            quantity = amount_to_invest / price
-            cost = quantity * price
-            
-            # Mise à jour immédiate du Cash
-            usdt_asset['quantity'] -= cost
-            usdt_asset['updated_at'] = datetime.now(timezone.utc).isoformat()
-
-            # Ajout de la crypto
-            new_position = {
-                "symbol": symbol,
-                "strategy": strategy_name,
-                "quantity": quantity,
-                "entry_price": price,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            self.portfolio.append(new_position)
-            
-            logger.info(f"🚀 {strategy_name} ACHÈTE {symbol}: {quantity:.4f} (Cash restant: {usdt_asset['quantity']:.2f})")
-            
-            return {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "symbol": symbol,
-                "side": "BUY",
-                "price": price,
-                "quantity": quantity,
-                "strategy": strategy_name,
-                "pnl": 0.0
-            }
-
-        elif side == "SELL":
-            # Retrouver la position crypto spécifique à cette stratégie
-            position = next((p for p in self.portfolio if p['symbol'] == symbol and p['strategy'] == strategy_name), None)
-            
-            if not position:
-                return None
-            
-            qty_to_sell = position['quantity']
-            revenue = qty_to_sell * price
-            
-            # Calcul PnL
-            pnl = (price - position['entry_price']) * qty_to_sell
-            
-            # Mise à jour du Cash
-            usdt_asset['quantity'] += revenue
-            usdt_asset['updated_at'] = datetime.now(timezone.utc).isoformat()
-            
-            # Suppression de la position crypto
-            self.portfolio.remove(position)
-            
-            logger.info(f"💰 {strategy_name} VEND {symbol}: +{revenue:.2f} USDT (PnL: {pnl:.2f})")
-            
-            return {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "symbol": symbol,
-                "side": "SELL",
-                "price": price,
-                "quantity": qty_to_sell,
-                "strategy": strategy_name,
-                "pnl": pnl
-            }
-        
-        return None
-
-    async def run_cycle_async(self):
-        """Cycle de trading"""
-        logger.info("--- Nouveau cycle d'analyse ---")
-        
-        trading_pairs = self.config.get("trading", {}).get("pairs", list(COINLORE_IDS.keys()))
-
-        for symbol in trading_pairs:
-            df = await self.fetch_market_data(symbol)
-            if df.empty: continue
-
-            # Analyse par chaque stratégie active
-            for name, strategy in self.strategies.items():
-                
-                # Vérification : a-t-on déjà du stock pour CETTE stratégie ?
-                current_qty = 0
-                for item in self.portfolio:
-                    if item['symbol'] == symbol and item['strategy'] == name:
-                        current_qty = item['quantity']
-                        break
-                
-                signal = strategy.generate_signals(df, symbol)
-
-                if signal:
-                    # Filtres logiques
-                    if signal['side'] == "BUY" and current_qty > 0: continue
-                    if signal['side'] == "SELL" and current_qty == 0: continue
-
-                    # Exécution INTERNE (plus sûre)
-                    trade_result = await self._execute_trade_internal(symbol, signal, name)
-                    
-                    if trade_result:
-                        self.trades_history.append(trade_result)
-                        self.db.save_trades(self.trades_history)
-                        self.db.save_portfolio(self.portfolio)
-
-        # Snapshot historique
+        # 2. Envoi Ordre Exchange
         try:
-            total_value = FinancialMetrics.calculate_total_value(self.portfolio, self.strategies)
-            self.portfolio_history.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "total_value": total_value,
-                "details": self.portfolio.copy()
-            })
+            logger.info(f"⚡ Exécution ordre {signal.signal_type} sur {signal.symbol}")
+            
+            # 3. Mise à jour du Modèle Portfolio
+            if signal.signal_type == SignalType.BUY:
+                new_pos = Position(
+                    symbol=signal.symbol,
+                    strategy_name=signal.strategy_name,
+                    quantity=execution_plan['quantity'],
+                    entry_price=current_price,
+                    current_price=current_price
+                )
+                self.portfolio.add_position(new_pos)
+                self.portfolio.current_cash -= (execution_plan['quantity'] * current_price)
+                
+            elif signal.signal_type == SignalType.SELL:
+                # Clôture Position
+                trade: Trade = self.portfolio.close_position(signal.symbol, current_price)
+                
+                # Convertir et sauvegarder le trade
+                trade_record = TradeRecord(
+                    timestamp=datetime.now(timezone.utc),
+                    symbol=trade.symbol,
+                    strategy_name=trade.strategy_name,
+                    side="SELL",
+                    quantity=trade.quantity,
+                    entry_price=trade.entry_price,
+                    exit_price=trade.exit_price,
+                    pnl=trade.pnl,
+                    pnl_percent=trade.pnl_percent
+                )
+                self.db.record_trade(trade_record)
+
+            # 4. Sauvegarde État Portfolio
+            portfolio_items = self._convert_portfolio_to_items()
+            self.db.save_portfolio(portfolio_items)
+
         except Exception as e:
-            logger.error(f"Erreur snapshot: {e}")
+            logger.error(f"💥 Échec exécution ordre: {e}")
 
-    async def run(self, duration_minutes=None):
-        """Lance le bot"""
-        if duration_minutes is None:
-            duration_minutes = self.config.get("system", {}).get("max_runtime_minutes", 350)
-        
-        end_time = time.time() + (duration_minutes * 60)
-        
-        logger.info(f"⏱️ Démarrage Phoenix. Durée: {duration_minutes} minutes")
-        
+    async def _periodic_sync(self):
+        """Tâches de fond périodiques."""
         try:
-            while time.time() < end_time:
-                await self.run_cycle_async()
-                # Pause courte pour scalping (15s) ou longue (60s) selon config
-                await asyncio.sleep(15) 
-        except KeyboardInterrupt:
-            logger.info("Arrêt demandé par l'utilisateur")
-        finally:
-            self.shutdown()
-
-    def shutdown(self):
-        logger.info("💾 Sauvegarde finale...")
-        self.db.save_portfolio(self.portfolio)
-        
-        stats = FinancialMetrics.get_comprehensive_stats(self.portfolio_history, self.trades_history)
-        logger.info(f"📊 Rapport Session: {json.dumps(stats, indent=2, default=str)}")
-        
-        if self.portfolio_history:
-            res = {
-                "PHOENIX_GLOBAL": {
-                    "portfolio_history": self.portfolio_history,
-                    "results": {
-                        "Return": stats.get('total_return', 0),
-                        "Sharpe Ratio": stats.get('sharpe_ratio', 0),
-                        "Trades": stats.get('total_trades', 0)
-                    }
-                }
+            # Snapshot des performances
+            snapshot = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_equity": float(self.portfolio.total_equity),
+                "cash": float(self.portfolio.current_cash),
+                "positions_count": len(self.portfolio.positions),
+                "unrealized_pnl": float(self.portfolio.unrealized_pnl),
+                "realized_pnl": float(self.portfolio.realized_pnl)
             }
-            try:
-                self.analytics.create_comprehensive_dashboard(res)
-            except Exception as e:
-                logger.error(f"Erreur Dashboard: {e}")
+            self.portfolio.history_snapshots.append(snapshot)
+            self.db.save_portfolio_history(snapshot)
+            
+        except Exception as e:
+            logger.error(f"⚠️ Erreur sync périodique: {e}")
+
+# ==============================================================================
+# Point d'entrée
+# ==============================================================================
 
 if __name__ == "__main__":
     bot = PhoenixBot()
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Gestion propre des signaux (CTRL+C)
+    def handle_exit():
+        logger.info("🛑 Signal d'arrêt reçu...")
+        asyncio.create_task(bot.shutdown())
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, handle_exit)
+        
     try:
-        asyncio.run(bot.run())
+        loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
-        bot.shutdown()
+        pass
+    finally:
+        loop.close()
