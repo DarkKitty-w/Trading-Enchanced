@@ -1,161 +1,205 @@
 import numpy as np
 import logging
 import math
+from typing import Dict, Any, Tuple, Optional
+
+# Configuration du logger
+logger = logging.getLogger("PhoenixExecution")
 
 class ExecutionManager:
     """
-    Gère toute la logique d'exécution des ordres :
-    - Calcul des prix réalistes (Spread + Slippage)
-    - Calcul des tailles de positions (Risk Management)
-    - Validation des ordres (Fonds suffisants, Min Notional)
-    - Nettoyage des précisions (Décimales)
+    Gère l'exécution des ordres avec une sécurité financière stricte.
+    
+    Principes :
+    1. Pas de valeurs par défaut "magiques". Toute config doit être explicite.
+    2. Fail-Fast : Si une donnée est invalide (ex: prix négatif), on lève une exception.
+    3. Distinction nette entre Equity (pour le risque) et Available Balance (pour l'achat).
     """
-    def __init__(self, config: dict):
+    
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.logger = logging.getLogger("PhoenixExecution")
         
-        # Chargement des paramètres d'exécution
-        exec_conf = config.get('execution', {})
-        self.fee_rate = exec_conf.get('fee_rate', 0.001)
-        self.base_spread = exec_conf.get('base_spread', 0.0005)
-        self.slippage_multiplier = exec_conf.get('slippage_multiplier', 1.5)
-        self.min_notional = exec_conf.get('min_notional_usd', 10.0)
-        self.precisions = exec_conf.get('precision', {})
+        # Validation stricte de la configuration d'exécution
+        if 'execution' not in config:
+            raise ValueError("❌ Configuration 'execution' manquante dans le fichier de config.")
+            
+        exec_conf = config['execution']
         
-        # Chargement des paramètres de risque globaux
-        risk_conf = config.get('risk_management', {}).get('global_settings', {})
-        self.risk_per_trade = risk_conf.get('risk_per_trade_pct', 0.02)
-        self.max_exposure = risk_conf.get('max_portfolio_exposure_pct', 0.95)
+        # Chargement OBLIGATOIRE des paramètres (pas de défauts)
+        try:
+            self.fee_rate = float(exec_conf['fee_rate'])
+            self.base_spread = float(exec_conf['base_spread'])
+            self.slippage_multiplier = float(exec_conf['slippage_multiplier'])
+            self.min_notional = float(exec_conf['min_notional_usd'])
+            self.max_slippage_retry = int(exec_conf['max_slippage_retry'])
+            self.force_market_orders = bool(exec_conf['force_market_orders'])
+            
+            # Dictionnaire des précisions par paire (ex: 'BTC/USDT': {'price': 2, 'qty': 5})
+            self.precisions = exec_conf['precision'] 
+        except KeyError as e:
+            raise ValueError(f"❌ Paramètre d'exécution manquant : {e}")
+        except ValueError as e:
+            raise ValueError(f"❌ Type de paramètre invalide dans 'execution' : {e}")
+
+        # Validation de la configuration de risque
+        if 'risk_management' not in config or 'global_settings' not in config['risk_management']:
+            raise ValueError("❌ Configuration 'risk_management.global_settings' manquante.")
+
+        logger.info("✅ ExecutionManager initialisé avec configuration stricte.")
 
     def get_realistic_price(self, market_price: float, side: str, volatility: float) -> float:
         """
-        Calcule un prix d'exécution réaliste simulant les conditions réelles du marché.
-        
-        Formule : Prix Marché +/- (Spread Base + (Volatilité * Multiplicateur Slippage))
+        Simule un prix d'exécution réaliste en incluant Spread et Slippage.
+        Lève une erreur si le prix est invalide.
         """
         if market_price <= 0:
-            return market_price
-
-        # Impact de la volatilité sur le spread (Slippage Dynamique)
-        # Si le marché est très volatil, le spread s'écarte.
-        dynamic_slippage = volatility * self.slippage_multiplier
-        total_penalty = self.base_spread + dynamic_slippage
+            raise ValueError(f"❌ Prix de marché invalide : {market_price}")
+        if volatility < 0:
+            raise ValueError(f"❌ Volatilité invalide : {volatility}")
         
-        # Sécurité anti-aberration (Max 5% de slippage)
-        total_penalty = min(total_penalty, 0.05)
+        # Calcul du spread dynamique basé sur la volatilité
+        dynamic_spread = self.base_spread + (volatility * self.slippage_multiplier)
         
+        # Application du spread (Achat plus cher, Vente moins cher)
         if side.upper() == 'BUY':
-            # On achète un peu plus cher que le prix affiché (Ask)
-            final_price = market_price * (1 + total_penalty)
-        else: # SELL
-            # On vend un peu moins cher que le prix affiché (Bid)
-            final_price = market_price * (1 - total_penalty)
+            final_price = market_price * (1 + dynamic_spread)
+        elif side.upper() == 'SELL':
+            final_price = market_price * (1 - dynamic_spread)
+        else:
+            raise ValueError(f"❌ Côté de transaction inconnu : {side}")
             
         return final_price
 
-    def calculate_fees(self, total_amount_usd: float) -> float:
-        """Calcule les frais de transaction (Exchange fee)"""
-        return total_amount_usd * self.fee_rate
-
     def adjust_quantity_precision(self, symbol: str, quantity: float) -> float:
         """
-        Arrondit la quantité selon les règles de l'exchange (LOT_SIZE).
-        Important : On tronque (floor) pour ne jamais essayer d'acheter plus que ce qu'on a.
+        Ajuste la quantité selon les règles de l'exchange.
+        NE DEVINE PAS. Si le symbole n'est pas configuré -> Erreur.
         """
-        precision_info = self.precisions.get(symbol, self.precisions.get('default', {'amount': 4}))
-        decimals = precision_info.get('amount', 4)
-        
-        if decimals == 0:
-            return math.floor(quantity)
-        
+        if symbol not in self.precisions:
+            raise ValueError(f"❌ Précision non configurée pour la paire : {symbol}")
+            
+        decimals = self.precisions[symbol].get('quantity_precision')
+        if decimals is None:
+            raise ValueError(f"❌ 'quantity_precision' manquant pour {symbol}")
+            
+        # Truncate (floor) pour ne pas dépasser le solde disponible à cause d'un arrondi
         factor = 10 ** decimals
         return math.floor(quantity * factor) / factor
 
     def adjust_price_precision(self, symbol: str, price: float) -> float:
         """
-        Arrondit le prix selon les règles de l'exchange (TICK_SIZE).
-        Ici l'arrondi standard est acceptable.
+        Ajuste le prix selon les règles de l'exchange.
         """
-        precision_info = self.precisions.get(symbol, self.precisions.get('default', {'price': 2}))
-        decimals = precision_info.get('price', 2)
+        if symbol not in self.precisions:
+            raise ValueError(f"❌ Précision non configurée pour la paire : {symbol}")
+            
+        decimals = self.precisions[symbol].get('price_precision')
+        if decimals is None:
+            raise ValueError(f"❌ 'price_precision' manquant pour {symbol}")
+            
+        # Arrondi standard pour le prix
         return round(price, decimals)
 
-    def validate_order(self, price: float, quantity: float, balance_available: float, side: str) -> bool:
+    def calculate_dynamic_position_size(
+        self, 
+        strategy_name: str, 
+        account_state: Dict[str, float], 
+        volatility: float,
+        current_price: float
+    ) -> float:
         """
-        Validation stricte avant envoi de l'ordre.
-        Renvoie True si l'ordre est valide, False sinon.
-        """
-        if price <= 0 or quantity <= 0:
-            return False
-
-        notional_value = price * quantity
+        Calcule la taille de position en USD de manière sécurisée.
         
-        # 1. Règle du Minimum Notional (Anti-Poussière)
-        if notional_value < self.min_notional:
-            # On ne loggue en warning que si c'est significatif, sinon debug
-            if notional_value > 1.0: 
-                self.logger.warning(f"⚠️ ORDRE REJETÉ : Valeur {notional_value:.2f}$ inférieure au minimum {self.min_notional}$")
-            return False
+        Args:
+            strategy_name: Nom de la stratégie (pour récupérer les params de risque spécifiques)
+            account_state: Dict contenant {'equity': float, 'available_balance': float}
+            volatility: Volatilité actuelle de l'actif
+            current_price: Prix actuel (pour vérification min notional)
             
-        # 2. Vérification des fonds (Simulation)
-        if side.upper() == 'BUY':
-            total_cost = notional_value * (1 + self.fee_rate) # Coût + Frais
-            if total_cost > balance_available:
-                self.logger.warning(f"⚠️ ORDRE REJETÉ : Fonds insuffisants ({balance_available:.2f}$ dispo < {total_cost:.2f}$ requis)")
-                return False
+        Returns:
+            float: Taille de la position en USD.
+            
+        Raises:
+            ValueError: Si fonds insuffisants, config invalide, ou calcul incohérent.
+        """
+        # 1. Validation des entrées
+        equity = account_state.get('equity')
+        available_balance = account_state.get('available_balance')
+        
+        if equity is None or available_balance is None:
+            raise ValueError("❌ 'account_state' doit contenir 'equity' et 'available_balance'")
+            
+        if equity <= 0:
+            raise ValueError(f"❌ Equity invalide ou nulle : {equity}")
 
+        # 2. Récupération paramètre risque global
+        risk_settings = self.config['risk_management']['global_settings']
+        max_risk_per_trade_pct = risk_settings['max_risk_per_trade_pct'] # ex: 0.01 (1%)
+        max_position_size_pct = risk_settings['max_position_size_pct']   # ex: 0.20 (20%)
+        
+        # 3. Calcul de la taille théorique basée sur le risque (Volatility Sizing)
+        # Formule : (Equity * Risk%) / Volatility
+        # Si volatilité faible -> grosse position (plafonnée ensuite)
+        # Si volatilité forte -> petite position
+        
+        # Protection contre division par zéro
+        safe_vol = max(volatility, 0.001) 
+        
+        # Taille basée sur le risque de volatilité (Target Risk)
+        # Exemple: On veut risquer 1% de l'equity. Si la vol est de 2%, on prend 50% de position ? 
+        # C'est agressif. Utilisons une approche Kelly simplifiée ou % fixe ajusté.
+        
+        # Approche simplifiée robuste : 
+        # Position = Equity * %_Risk_Allocation
+        # Où %_Risk_Allocation dépend de la stratégie, mais ici on simplifie via config
+        
+        # On calcule le montant max qu'on s'autorise à perdre
+        risk_amount_usd = equity * max_risk_per_trade_pct
+        
+        # Estimation du Stop Loss théorique basé sur la volatilité (ex: 2 * ATR/Vol)
+        estimated_sl_pct = safe_vol * 2.0
+        
+        # Position Size = Risk Amount / SL %
+        theoretical_position_usd = risk_amount_usd / estimated_sl_pct
+        
+        # 4. Plafonnement Hard (Max Position Size % of Equity)
+        max_allowed_position_usd = equity * max_position_size_pct
+        final_position_usd = min(theoretical_position_usd, max_allowed_position_usd)
+        
+        # 5. Vérification contre le Solde Disponible (Available Balance)
+        # On garde une marge de sécurité (buffer) pour les frais (ex: 1%)
+        max_buyable_usd = available_balance * 0.99
+        
+        if final_position_usd > max_buyable_usd:
+            logger.warning(f"⚠️ Taille réduite par manque de liquidité : {final_position_usd:.2f}$ -> {max_buyable_usd:.2f}$")
+            final_position_usd = max_buyable_usd
+            
+        # 6. Vérification Min Notional (Sécurité finale)
+        if final_position_usd < self.min_notional:
+            # PLUTÔT QUE RETOURNER 0.0, ON LÈVE UNE ERREUR POUR QUE LA STRATÉGIE SACHE POURQUOI
+            raise ValueError(
+                f"❌ Taille de position calculée ({final_position_usd:.2f}$) inférieure au minimum requis ({self.min_notional}$)."
+            )
+
+        logger.info(
+            f"💰 Sizing [{strategy_name}]: Eq={equity:.0f}$ | Vol={volatility:.2%} | "
+            f"RiskAllowed={risk_amount_usd:.2f}$ | Size={final_position_usd:.2f}$"
+        )
+        
+        return final_position_usd
+
+    def validate_order(self, symbol: str, side: str, quantity: float, price: float) -> bool:
+        """
+        Validation finale avant envoi à l'API.
+        """
+        if quantity <= 0 or price <= 0:
+            raise ValueError(f"❌ Ordre invalide : Qty={quantity}, Price={price}")
+            
+        notional = quantity * price
+        if notional < self.min_notional:
+            raise ValueError(f"❌ Valeur notionnelle insuffisante : {notional:.2f}$ < {self.min_notional}$")
+            
+        if symbol not in self.precisions:
+            raise ValueError(f"❌ Symbole non configuré : {symbol}")
+            
         return True
-
-    def calculate_dynamic_position_size(self, strategy_name: str, capital_available: float, volatility: float) -> float:
-        """
-        Calculateur de taille de position intelligent (Risk Management).
-        Utilise la méthode du 'Fixed Fractional Risk' ajustée par la volatilité.
-        """
-        # 1. Récupération des paramètres de la stratégie active
-        strat_params = self.config['strategies']['parameters'].get(strategy_name, {})
-        stop_loss_pct = strat_params.get('stop_loss_pct', 0.05) # Par défaut 5% si non défini
-        
-        # Sécurité division par zéro
-        if stop_loss_pct <= 0: stop_loss_pct = 0.05
-        
-        # 2. Formule : Risque en $ / % Stop Loss
-        # Combien je suis prêt à perdre sur ce trade ? (Ex: 1000$ * 2% = 20$)
-        risk_amount_usd = capital_available * self.risk_per_trade
-        
-        # Quelle taille de position me fait perdre 20$ si le SL est touché ?
-        # Position = 20$ / 0.05 (5% SL) = 400$
-        position_size_usd = risk_amount_usd / stop_loss_pct
-        
-        # 3. Ajustement Volatilité (Facteur de prudence)
-        # Si la volatilité est extrême (> 2%), on réduit la taille
-        if volatility > 0.02:
-            vol_factor = 0.02 / volatility
-            position_size_usd *= vol_factor
-
-        # 4. Limites Absolues (Hard Limits)
-        # Ne jamais dépasser le capital disponible
-        position_size_usd = min(position_size_usd, capital_available)
-        
-        # Ne jamais dépasser l'exposition max par trade (si définie ailleurs)
-        max_pos_cap = capital_available * 0.25 # Ex: Max 25% du capital sur un seul coin
-        position_size_usd = min(position_size_usd, max_pos_cap)
-
-        return position_size_usd
-
-if __name__ == "__main__":
-    # Test Unitaire Rapide
-    print("Test ExecutionManager...")
-    dummy_conf = {
-        "execution": {"fee_rate": 0.001, "base_spread": 0.001, "min_notional_usd": 10},
-        "risk_management": {"global_settings": {"risk_per_trade_pct": 0.01}},
-        "strategies": {"parameters": {"TestStrat": {"stop_loss_pct": 0.05}}}
-    }
-    exec_mgr = ExecutionManager(dummy_conf)
-    
-    price = 100.0
-    vol = 0.01
-    real_price = exec_mgr.get_realistic_price(price, 'BUY', vol)
-    print(f"Prix Marché: {price}, Prix Réaliste (Achat): {real_price:.4f}")
-    
-    size = exec_mgr.calculate_dynamic_position_size("TestStrat", 1000.0, vol)
-    print(f"Capital: 1000$, Vol: 1%, Taille Position Calc: {size:.2f}$")
