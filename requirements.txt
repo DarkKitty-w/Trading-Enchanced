@@ -11,3 +11,4 @@ seaborn
 matplotlib
 optuna
 streamlit
+pandas_ta
