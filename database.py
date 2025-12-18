@@ -1,320 +1,355 @@
 import os
-import logging
-import json  # AJOUT: Import manquant
-from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Any, Dict
-from uuid import uuid4
+import uuid
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# Tente d'importer supabase, sinon gère l'erreur pour le mode local sans dépendance
-try:
-    from supabase import create_client, Client
-except ImportError:
-    Client = None
+# Load environment variables
+load_dotenv()
 
-logger = logging.getLogger("PhoenixDB")
-
-# ==============================================================================
-# 1. MODÈLES DE DONNÉES (SCHÉMAS EXPLICITES)
-# ==============================================================================
-
-@dataclass
-class PortfolioItem:
-    """Représente une ligne du portfolio."""
-    timestamp: str  # AJOUT: Champ manquant
-    initial_capital: float  # AJOUT: Champ manquant
-    current_cash: float  # AJOUT: Champ manquant
-    currency: str  # AJOUT: Champ manquant
-    total_equity: float  # AJOUT: Champ manquant
-    symbol: str
-    strategy_name: Optional[str] = None  # RENOMMÉ: strategy → strategy_name
-    position_id: Optional[str] = None  # AJOUT: Champ manquant
-    quantity: Optional[float] = 0.0
-    entry_price: Optional[float] = 0.0
-    current_price: Optional[float] = 0.0
-    entry_time: Optional[str] = None  # AJOUT: Champ manquant
-    status: str = "OPEN"  # AJOUT: Champ manquant
-    snapshot_data: Optional[Dict] = None  # AJOUT: Champ manquant
-
-    def __post_init__(self):
-        # Validation basique
-        if self.quantity < 0:
-            raise ValueError(f"PortfolioItem: Quantité négative interdite ({self.quantity})")
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-
-@dataclass
-class TradeRecord:
-    """Représente l'historique d'un trade exécuté."""
-    id: str  # RENOMMÉ: trade_id → id
-    symbol: str
-    side: str  # 'BUY' ou 'SELL'
-    quantity: float
-    price: float
-    fees: float  # RENOMMÉ: fee → fees
-    strategy_name: str  # RENOMMÉ: strategy → strategy_name
-    pnl: Optional[float] = 0.0  # AJOUT: Champ manquant
-    pnl_percent: Optional[float] = 0.0  # AJOUT: Champ manquant (renommé pnl_percent au lieu de pnl_percentage)
-    reason: Optional[str] = ""  # AJOUT: Champ manquant
-    position_size_usd: Optional[float] = 0.0  # AJOUT: Champ manquant
-    entry_price: Optional[float] = 0.0  # AJOUT: Champ manquant
-    exit_price: Optional[float] = 0.0  # AJOUT: Champ manquant
-    timestamp: str = ""
-
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-        if not self.id:
-            self.id = str(uuid4())
-        if self.side not in ['BUY', 'SELL']:
-            raise ValueError(f"TradeRecord: Side invalide '{self.side}'")
-
-@dataclass
-class LogEntry:
-    """Représente un log système critique."""
-    level: str
-    message: str
-    metadata: Dict[str, Any]
-    timestamp: str = ""
-
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-
-# ==============================================================================
-# 2. GESTIONNAIRE DE BASE DE DONNÉES
-# ==============================================================================
-
-class DatabaseHandler:
+class Database:
     """
-    Gère la persistance des données.
-    Refuse de fonctionner en PROD sans connexion valide.
+    Authoritative Supabase Connector.
+    Enforces strict strategy isolation by requiring strategy_id for all operations.
+    Replaces the legacy SQLite DatabaseHandler.
     """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):  # MODIF: config optionnelle
-        self.config = config or {}
-        self.environment = self.config.get('system', {}).get('environment', 'development')
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Database, cls).__new__(cls)
+            cls._instance._init_connection()
+        return cls._instance
+
+    def _init_connection(self):
+        """Initializes the connection to Supabase."""
+        url: str = os.environ.get("SUPABASE_URL")
+        key: str = os.environ.get("SUPABASE_KEY")
+
+        if not url or not key:
+            raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY in environment variables.")
+
+        try:
+            self.client: Client = create_client(url, key)
+            print(f"✅ Connected to Supabase: {url}")
+        except Exception as e:
+            print(f"❌ Failed to connect to Supabase: {e}")
+            raise e
+
+    # ------------------------------------------------------------------
+    # 1. STRATEGY MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def register_strategy(self, name: str, initial_cash: float = 10000.0) -> str:
+        """
+        Registers a strategy. If it exists, returns its ID.
+        If it's new, creates it and initializes its cash wallet.
+        """
+        # 1. Try to fetch existing strategy by name
+        res = self.client.table("strategies").select("id").eq("name", name).execute()
         
-        self.url = os.environ.get("SUPABASE_URL")
-        self.key = os.environ.get("SUPABASE_KEY")
-        self.client: Optional[Client] = None
+        if res.data:
+            strategy_id = res.data[0]['id']
+            print(f"ℹ️ Strategy '{name}' found: {strategy_id}")
+            return strategy_id
+
+        # 2. Create new strategy
+        try:
+            new_strat = self.client.table("strategies").insert({"name": name}).execute()
+            strategy_id = new_strat.data[0]['id']
+
+            # 3. Initialize Cash
+            self.client.table("strategy_cash").insert({
+                "strategy_id": strategy_id,
+                "initial_cash": initial_cash,
+                "available_cash": initial_cash
+            }).execute()
+
+            print(f"🆕 Strategy '{name}' created: {strategy_id}")
+            return strategy_id
+
+        except Exception as e:
+            print(f"❌ Error registering strategy '{name}': {e}")
+            raise e
+
+    # ------------------------------------------------------------------
+    # 2. CASH MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def get_strategy_cash(self, strategy_id: str) -> float:
+        """Fetch available cash for a specific strategy."""
+        res = self.client.table("strategy_cash")\
+            .select("available_cash")\
+            .eq("strategy_id", strategy_id)\
+            .execute()
         
-        # Stockage volatile (en mémoire) si pas de DB
-        self._memory_store = {
-            "portfolio": {},
-            "trades": [],
-            "logs": [],
-            "portfolio_history": []  # AJOUT: Stockage historique en mémoire
+        if res.data:
+            return float(res.data[0]['available_cash'])
+        return 0.0
+
+    def update_cash(self, strategy_id: str, amount: float):
+        """
+        Update the available cash. 
+        NOTE: 'amount' is the NEW total amount, not a delta.
+        """
+        self.client.table("strategy_cash")\
+            .update({
+                "available_cash": amount, 
+                "updated_at": datetime.utcnow().isoformat()
+            })\
+            .eq("strategy_id", strategy_id)\
+            .execute()
+
+    # ------------------------------------------------------------------
+    # 3. TRADE LOGGING
+    # ------------------------------------------------------------------
+
+    def log_trade(self, strategy_id: str, symbol: str, side: str, price: float, quantity: float, fees: float = 0.0):
+        """Logs a paper trade execution."""
+        payload = {
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "side": side.upper(),  # BUY or SELL
+            "price": price,
+            "quantity": quantity,
+            "fees": fees,
+            "executed_at": datetime.utcnow().isoformat()
         }
-        self.is_volatile = False
+        self.client.table("trades").insert(payload).execute()
 
-        self._connect()
+    def get_strategy_trades(self, strategy_id: str) -> List[Dict]:
+        """Fetch trade history strictly for this strategy."""
+        res = self.client.table("trades")\
+            .select("*")\
+            .eq("strategy_id", strategy_id)\
+            .order("executed_at", desc=True)\
+            .execute()
+        return res.data
 
-    def _connect(self):
+    # ------------------------------------------------------------------
+    # 4. POSITION MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def open_position(self, strategy_id: str, symbol: str, side: str, quantity: float, entry_price: float):
+        """Creates a new OPEN position record."""
+        payload = {
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "side": side.upper(),  # LONG or SHORT
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "status": "OPEN",
+            "opened_at": datetime.utcnow().isoformat()
+        }
+        self.client.table("positions").insert(payload).execute()
+
+    def close_position(self, strategy_id: str, symbol: str, exit_price: float):
         """
-        Établit la connexion.
-        Lève une RuntimeError CRITIQUE en production si échec.
+        Marks OPEN positions for this strategy/symbol as CLOSED.
+        Returns the closed position for PnL calculation.
         """
-        if self.url and self.key and Client:
+        # Find open positions for this specific strategy & symbol
+        open_positions = self.client.table("positions")\
+            .select("*")\
+            .eq("strategy_id", strategy_id)\
+            .eq("symbol", symbol)\
+            .eq("status", "OPEN")\
+            .execute()
+
+        if not open_positions.data:
+            print(f"⚠️ No open position found to close for {symbol} (Strategy ID: {strategy_id})")
+            return None
+
+        # Update them to CLOSED
+        ids_to_close = [p['id'] for p in open_positions.data]
+        
+        self.client.table("positions")\
+            .update({
+                "status": "CLOSED", 
+                "exit_price": exit_price,
+                "closed_at": datetime.utcnow().isoformat()
+            })\
+            .in_("id", ids_to_close)\
+            .execute()
+        
+        return open_positions.data[0]  # Return first closed position
+
+    def get_strategy_positions(self, strategy_id: str, status: str = "OPEN") -> List[Dict]:
+        """Fetch positions filtered by strategy and status."""
+        res = self.client.table("positions")\
+            .select("*")\
+            .eq("strategy_id", strategy_id)\
+            .eq("status", status)\
+            .execute()
+        return res.data
+
+    # ------------------------------------------------------------------
+    # 5. PERFORMANCE METRICS & HEARTBEAT
+    # ------------------------------------------------------------------
+
+    def log_performance(self, strategy_id: str, metrics: Dict[str, Any]):
+        """
+        Logs a snapshot of performance metrics.
+        """
+        # Filter metrics to ensure we only send what the DB expects
+        valid_keys = {"total_pnl", "sharpe_ratio", "max_drawdown", "win_rate", 
+                     "trades_count", "unrealized_pnl", "asset", "price", 
+                     "return_pct", "timestamp", "win"}
+        payload = {k: v for k, v in metrics.items() if k in valid_keys}
+        
+        payload["strategy_id"] = strategy_id
+        
+        # Use provided timestamp or current time
+        if "timestamp" not in payload:
+            payload["calculated_at"] = datetime.utcnow().isoformat()
+        else:
+            payload["calculated_at"] = payload.pop("timestamp")
+        
+        self.client.table("performance_metrics").insert(payload).execute()
+
+    # ------------------------------------------------------------------
+    # 6. PORTFOLIO HISTORY (for backtesting and analytics)
+    # ------------------------------------------------------------------
+
+    def log_portfolio_history(self, strategy_id: str, timestamp: datetime, equity: float, 
+                            cash: float, positions_value: float):
+        """
+        Logs portfolio snapshot for equity curve reconstruction.
+        """
+        payload = {
+            "strategy_id": strategy_id,
+            "timestamp": timestamp.isoformat(),
+            "total_equity": equity,
+            "cash": cash,
+            "positions_value": positions_value,
+            "logged_at": datetime.utcnow().isoformat()
+        }
+        self.client.table("portfolio_history").insert(payload).execute()
+
+    def get_portfolio_history(self, strategy_id: str, limit: int = 1000) -> List[Dict]:
+        """Fetch portfolio history for a strategy."""
+        res = self.client.table("portfolio_history")\
+            .select("*")\
+            .eq("strategy_id", strategy_id)\
+            .order("timestamp")\
+            .limit(limit)\
+            .execute()
+        return res.data
+
+    # ------------------------------------------------------------------
+    # 7. MARKET DATA CACHE
+    # ------------------------------------------------------------------
+
+    def cache_market_data(self, symbol: str, timeframe: str, data: Dict, ttl_minutes: int = 5):
+        """
+        Caches market data to reduce API calls.
+        """
+        expires_at = datetime.utcnow().timestamp() + (ttl_minutes * 60)
+        
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "data": data,
+            "expires_at": expires_at,
+            "cached_at": datetime.utcnow().isoformat()
+        }
+        
+        # Delete old cache for this symbol/timeframe
+        self.client.table("market_data_cache")\
+            .delete()\
+            .eq("symbol", symbol)\
+            .eq("timeframe", timeframe)\
+            .execute()
+        
+        # Insert new cache
+        self.client.table("market_data_cache").insert(payload).execute()
+
+    def get_cached_market_data(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        """
+        Retrieves cached market data if not expired.
+        """
+        current_time = datetime.utcnow().timestamp()
+        
+        res = self.client.table("market_data_cache")\
+            .select("*")\
+            .eq("symbol", symbol)\
+            .eq("timeframe", timeframe)\
+            .gt("expires_at", current_time)\
+            .execute()
+        
+        if res.data:
+            return res.data[0]["data"]
+        return None
+
+    # ------------------------------------------------------------------
+    # 8. STRATEGY PARAMETERS (for optimization)
+    # ------------------------------------------------------------------
+
+    def save_strategy_parameters(self, strategy_id: str, parameters: Dict[str, Any], 
+                               performance: Dict[str, Any]):
+        """
+        Saves optimized parameters for a strategy.
+        """
+        payload = {
+            "strategy_id": strategy_id,
+            "parameters": parameters,
+            "performance": performance,
+            "saved_at": datetime.utcnow().isoformat()
+        }
+        self.client.table("strategy_parameters").insert(payload).execute()
+
+    def get_best_strategy_parameters(self, strategy_id: str) -> Optional[Dict]:
+        """
+        Retrieves the best performing parameters for a strategy.
+        """
+        res = self.client.table("strategy_parameters")\
+            .select("*")\
+            .eq("strategy_id", strategy_id)\
+            .order("performance->'sharpe_ratio'", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if res.data:
+            return res.data[0]
+        return None
+
+    # ------------------------------------------------------------------
+    # 9. TRANSACTION SUPPORT
+    # ------------------------------------------------------------------
+
+    def execute_transaction(self, operations: List[Dict]):
+        """
+        Executes multiple database operations in a transaction.
+        Each operation should be a dict with keys: 'table', 'operation', 'data'
+        Example: {'table': 'trades', 'operation': 'insert', 'data': {...}}
+        """
+        # Note: Supabase doesn't support multi-table transactions in the Python client.
+        # This is a simulated transaction that executes sequentially.
+        # For true transactions, consider using Supabase's RPC functions.
+        
+        results = []
+        for op in operations:
             try:
-                self.client = create_client(self.url, self.key)
-                # Ping test
-                self.client.table("portfolio_items").select("symbol").limit(1).execute()  # MODIF: Table correcte
-                logger.info("✅ Connexion Supabase établie.")
-                return
-            except Exception as e:
-                logger.error(f"❌ Échec connexion Supabase: {e}")
-        
-        # Gestion du mode dégradé
-        if self.environment == 'production':
-            raise RuntimeError("🚨 CRITIQUE: Impossible de démarrer en PRODUCTION sans base de données fiable.")
-        
-        logger.warning("⚠️ Mode VOLATILE activé (Stockage en mémoire uniquement). Données perdues au redémarrage.")
-        self.is_volatile = True
-
-    # ==========================================================================
-    # MÉTHODES PORTFOLIO
-    # ==========================================================================
-
-    def save_portfolio(self, items: List[PortfolioItem]):
-        """
-        Sauvegarde l'état complet du portfolio.
-        Écrase l'état précédent (Snapshot).
-        """
-        if not items:
-            logger.warning("⚠️ Aucun item portfolio à sauvegarder")
-            return
-            
-        data = [asdict(item) for item in items]
-        
-        if self.is_volatile:
-            # En mémoire: on remplace tout
-            self._memory_store["portfolio"] = {item.symbol: item for item in items}
-            logger.debug(f"💾 [Volatile] Portfolio sauvegardé ({len(items)} items)")
-            return
-
-        try:
-            # Supabase Upsert - utilise la table 'portfolio_items' avec 'position_id' comme clé
-            for item in data:
-                # Nettoyer les valeurs None pour Supabase
-                cleaned_item = {k: v for k, v in item.items() if v is not None}
-                if 'position_id' in cleaned_item and cleaned_item['position_id']:
-                    # Upsert basé sur position_id
-                    self.client.table("portfolio_items").upsert(cleaned_item, on_conflict="position_id").execute()
-                else:
-                    # Insert simple
-                    self.client.table("portfolio_items").insert(cleaned_item).execute()
-            
-            # Historisation (Snapshot) - enregistrer un résumé
-            snapshot = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "total_equity": sum(item.get('total_equity', 0) for item in data if item.get('status') == 'SUMMARY'),
-                "cash": sum(item.get('current_cash', 0) for item in data if item.get('status') == 'SUMMARY'),
-                "positions_count": len([item for item in data if item.get('status') == 'OPEN']),
-                "details": json.dumps(data)  # Sauvegarde JSON des détails
-            }
-            self.client.table("portfolio_history").insert(snapshot).execute()
-            logger.info(f"💾 Portfolio sauvegardé en DB ({len(items)} items)")
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur sauvegarde portfolio: {e}")
-            # En production, on pourrait vouloir stopper si on ne peut pas sauvegarder
-
-    def load_portfolio(self) -> List[PortfolioItem]:
-        """Charge le portfolio depuis la source de vérité."""
-        items = []
-        
-        if self.is_volatile:
-            # Retourner uniquement les items OPEN (positions actives)
-            return [item for item in self._memory_store["portfolio"].values() 
-                    if item.status == "OPEN"]
-
-        try:
-            # Charger tous les items de portfolio
-            response = self.client.table("portfolio_items").select("*").execute()
-            for row in response.data:
-                # Reconstruction typée
-                items.append(PortfolioItem(
-                    timestamp=row.get('timestamp', ''),
-                    initial_capital=float(row.get('initial_capital', 0.0)),
-                    current_cash=float(row.get('current_cash', 0.0)),
-                    currency=row.get('currency', 'USD'),
-                    total_equity=float(row.get('total_equity', 0.0)),
-                    symbol=row.get('symbol', ''),
-                    strategy_name=row.get('strategy_name'),
-                    position_id=row.get('position_id'),
-                    quantity=float(row.get('quantity', 0.0)),
-                    entry_price=float(row.get('entry_price', 0.0)),
-                    current_price=float(row.get('current_price', 0.0)),
-                    entry_time=row.get('entry_time'),
-                    status=row.get('status', 'OPEN'),
-                    snapshot_data=row.get('snapshot_data')
-                ))
-        except Exception as e:
-            logger.error(f"❌ Erreur chargement portfolio: {e}")
-            raise e  # Propager l'erreur pour gestion externe
-            
-        # Filtrer pour ne retourner que les items OPEN (positions actives)
-        return [item for item in items if item.status == "OPEN"]
-
-    # ==========================================================================
-    # MÉTHODES TRADES
-    # ==========================================================================
-
-    def record_trade(self, trade: TradeRecord):
-        """Enregistre un trade exécuté de manière immuable."""
-        trade_dict = asdict(trade)
-        
-        if self.is_volatile:
-            self._memory_store["trades"].append(trade)
-            logger.info(f"📝 [Volatile] Trade enregistré: {trade.symbol} {trade.side} ({trade.id})")
-            return
-
-        try:
-            # Nettoyer les valeurs None
-            cleaned_trade = {k: v for k, v in trade_dict.items() if v is not None}
-            
-            # Insérer dans la table 'trades_history'
-            self.client.table("trades_history").insert(cleaned_trade).execute()
-            logger.info(f"📝 Trade persisté en DB: {trade.symbol} {trade.side} ({trade.id})")
-        except Exception as e:
-            logger.error(f"❌ CRITIQUE: Échec sauvegarde trade {trade.id}: {e}")
-            # Sauvegarde de secours en fichier local
-            self._backup_trade_to_file(trade_dict)
-
-    def _backup_trade_to_file(self, trade_dict: dict):
-        """Sauvegarde de secours en fichier JSON."""
-        try:
-            backup_dir = "backup_trades"
-            os.makedirs(backup_dir, exist_ok=True)
-            
-            filename = f"{backup_dir}/trade_{trade_dict.get('id', 'unknown')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            
-            with open(filename, 'w') as f:
-                json.dump(trade_dict, f, indent=2)
+                table = self.client.table(op['table'])
+                operation = op['operation']
+                data = op['data']
                 
-            logger.warning(f"📁 Trade sauvegardé en fichier de secours: {filename}")
-        except Exception as e:
-            logger.error(f"❌ Échec sauvegarde fichier de secours: {e}")
-
-    # ==========================================================================
-    # MÉTHODES LOGS SYSTÈME
-    # ==========================================================================
-
-    def log_system_event(self, entry: LogEntry):
-        """Log des événements structurés en DB pour audit."""
-        data = asdict(entry)
+                if operation == 'insert':
+                    result = table.insert(data).execute()
+                elif operation == 'update':
+                    result = table.update(data).execute()
+                elif operation == 'delete':
+                    result = table.delete().execute()
+                else:
+                    raise ValueError(f"Unknown operation: {operation}")
+                
+                results.append(result)
+                
+            except Exception as e:
+                # If any operation fails, we can't rollback easily
+                # Log error and raise
+                print(f"❌ Transaction failed at operation {op}: {e}")
+                raise e
         
-        if self.is_volatile:
-            self._memory_store["logs"].append(data)
-            return
-
-        try:
-            # "Fire and forget" - exécution asynchrone idéalement
-            self.client.table("system_logs").insert(data).execute()
-        except Exception as e:
-            # Ne pas faire planter le bot pour un log
-            logger.error(f"⚠️ Impossible d'envoyer le log système en DB: {e}")
-
-    # ==========================================================================
-    # MÉTHODES HISTORIQUES
-    # ==========================================================================
-
-    def save_portfolio_history(self, snapshot: Dict):
-        """Sauvegarde un snapshot de l'état du portfolio."""
-        if self.is_volatile:
-            self._memory_store["portfolio_history"].append(snapshot)
-            # Garder seulement les 100 derniers snapshots en mémoire
-            if len(self._memory_store["portfolio_history"]) > 100:
-                self._memory_store["portfolio_history"] = self._memory_store["portfolio_history"][-100:]
-            return
-
-        try:
-            self.client.table("portfolio_snapshots").insert(snapshot).execute()
-        except Exception as e:
-            logger.error(f"⚠️ Impossible de sauvegarder le snapshot: {e}")
-
-    # ==========================================================================
-    # UTILITAIRES
-    # ==========================================================================
-    
-    def clear_volatile_data(self):
-        """Nettoyage (utile pour les tests unitaires)."""
-        if self.is_volatile:
-            self._memory_store = {
-                "portfolio": {},
-                "trades": [],
-                "logs": [],
-                "portfolio_history": []
-            }
-            
-    def get_trade_count(self) -> int:
-        """Retourne le nombre de trades enregistrés."""
-        if self.is_volatile:
-            return len(self._memory_store["trades"])
-        try:
-            response = self.client.table("trades_history").select("id", count="exact").execute()
-            return response.count or 0
-        except Exception as e:
-            logger.error(f"❌ Erreur comptage trades: {e}")
-            return 0
+        return results
