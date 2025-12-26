@@ -23,6 +23,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Create Cache Folders
+      run: |
+        mkdir -p data_cache/BTC data_cache/ETH data_cache/SOL data_cache/BNB data_cache/XRP data_cache/ADA data_cache/DOGE
+
     # B. Installation de Python 3.10
     - name: Set up Python 3.10
       uses: actions/setup-python@v5
