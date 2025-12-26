@@ -123,116 +123,116 @@
         ],
         "parameters": {
             "MeanReversion": {
-                "period": 12,
-                "buy_threshold": 0.9508293696493194,
-                "sell_threshold": 1.031511147426949,
-                "min_volatility_filter": 0.006876440620798177
+                "period": 41,
+                "buy_threshold": 0.9562772237293419,
+                "sell_threshold": 1.0362930183681696,
+                "min_volatility_filter": 0.018318092164684587
             },
             "MA_Enhanced": {
                 "short_window": 12,
                 "long_window": 97,
                 "volatility_threshold": 0.017959754525911097,
-                "crossover_threshold": 0.014639878836228103,
+                "crossover_threshold": 0.0036599697090570257,
                 "trend_confirmation_candles": 2
             },
             "Momentum_Enhanced": {
-                "period": 18,
-                "threshold": 0.05006827129513911,
-                "min_volatility": 0.020562126711176684,
+                "period": 6,
+                "threshold": 0.07642198760773333,
+                "min_volatility": 0.02896896099223678,
                 "confirmation_period": 3
             },
             "MeanReversion_Pro": {
-                "period": 25,
-                "rsi_period": 21,
-                "rsi_oversold": 35,
-                "rsi_overbought": 72,
-                "buy_threshold": 0.9577997260168101,
-                "sell_threshold": 1.00290418060841,
+                "period": 33,
+                "rsi_period": 17,
+                "rsi_oversold": 39,
+                "rsi_overbought": 78,
+                "buy_threshold": 0.9723673763984637,
+                "sell_threshold": 1.0120665260437929,
                 "min_volatility_filter": 0.01,
-                "std_dev": 1.7340279606636548
+                "std_dev": 1.8425559749140772
             },
             "MA_Momentum_Hybrid": {
-                "short_window": 10,
-                "long_window": 59,
-                "momentum_period": 17,
-                "momentum_threshold": 0.03394633936788147,
-                "confirmation_candles": 1
+                "short_window": 19,
+                "long_window": 57,
+                "momentum_period": 11,
+                "momentum_threshold": 0.026160558099498715,
+                "confirmation_candles": 3
             },
             "Volatility_Regime_Adaptive": {
-                "lookback": 50,
-                "vol_threshold": 0.019260714596148743,
-                "regime_low_entry_pct": 0.015979909127171076,
-                "regime_high_entry_pct": 0.037959754525911105,
-                "ma_period": 16,
-                "confirmation_candles": 1
+                "lookback": 92,
+                "vol_threshold": 0.008918051585760306,
+                "regime_low_entry_pct": 0.01759308904224091,
+                "regime_high_entry_pct": 0.03343112873391137,
+                "ma_period": 37,
+                "confirmation_candles": 3
             }
         },
         "optimized": {
             "MeanReversion": {
                 "parameters": {
-                    "period": 12,
-                    "buy_threshold": 0.9508293696493194,
-                    "sell_threshold": 1.031511147426949,
-                    "min_volatility_filter": 0.006876440620798177
+                    "period": 41,
+                    "buy_threshold": 0.9562772237293419,
+                    "sell_threshold": 1.0362930183681696,
+                    "min_volatility_filter": 0.018318092164684587
                 },
-                "score": 0.10378725573278007,
-                "optimized_at": "2025-12-26T22:02:36.985360"
+                "score": 0.03894011257623707,
+                "optimized_at": "2025-12-26T22:17:35.575621"
             },
             "MA_Enhanced": {
                 "parameters": {
                     "short_window": 12,
                     "long_window": 97,
-                    "crossover_threshold": 0.014639878836228103,
+                    "crossover_threshold": 0.0036599697090570257,
                     "volatility_threshold": 0.017959754525911097
                 },
                 "score": 0.0,
-                "optimized_at": "2025-12-26T22:02:38.215362"
+                "optimized_at": "2025-12-26T22:18:54.465063"
             },
             "Momentum_Enhanced": {
                 "parameters": {
-                    "period": 18,
-                    "threshold": 0.05006827129513911,
-                    "min_volatility": 0.020562126711176684,
+                    "period": 6,
+                    "threshold": 0.07642198760773333,
+                    "min_volatility": 0.02896896099223678,
                     "confirmation_period": 3
                 },
-                "score": 0.0014403815034030494,
-                "optimized_at": "2025-12-26T22:02:39.404055"
+                "score": 0.0,
+                "optimized_at": "2025-12-26T22:20:04.233426"
             },
             "MeanReversion_Pro": {
                 "parameters": {
-                    "period": 25,
-                    "rsi_period": 21,
-                    "rsi_oversold": 35,
-                    "rsi_overbought": 72,
-                    "std_dev": 1.7340279606636548,
-                    "buy_threshold": 0.9577997260168101,
-                    "sell_threshold": 1.00290418060841
+                    "period": 33,
+                    "rsi_period": 17,
+                    "rsi_oversold": 39,
+                    "rsi_overbought": 78,
+                    "std_dev": 1.8425559749140772,
+                    "buy_threshold": 0.9723673763984637,
+                    "sell_threshold": 1.0120665260437929
                 },
-                "score": -999.0,
-                "optimized_at": "2025-12-26T22:02:40.741027"
+                "score": 0.042306543187379635,
+                "optimized_at": "2025-12-26T22:23:09.293880"
             },
             "MA_Momentum_Hybrid": {
                 "parameters": {
-                    "short_window": 10,
-                    "long_window": 59,
-                    "momentum_period": 17,
-                    "momentum_threshold": 0.03394633936788147,
-                    "confirmation_candles": 1
+                    "short_window": 19,
+                    "long_window": 57,
+                    "momentum_period": 11,
+                    "momentum_threshold": 0.026160558099498715,
+                    "confirmation_candles": 3
                 },
-                "score": -999.0,
-                "optimized_at": "2025-12-26T22:02:41.932039"
+                "score": -0.09649449063513668,
+                "optimized_at": "2025-12-26T22:25:23.014611"
             },
             "Volatility_Regime_Adaptive": {
                 "parameters": {
-                    "lookback": 50,
-                    "vol_threshold": 0.019260714596148743,
-                    "regime_low_entry_pct": 0.015979909127171076,
-                    "regime_high_entry_pct": 0.037959754525911105,
-                    "ma_period": 16,
-                    "confirmation_candles": 1
+                    "lookback": 92,
+                    "vol_threshold": 0.008918051585760306,
+                    "regime_low_entry_pct": 0.01759308904224091,
+                    "regime_high_entry_pct": 0.03343112873391137,
+                    "ma_period": 37,
+                    "confirmation_candles": 3
                 },
                 "score": 0.0,
-                "optimized_at": "2025-12-26T22:02:43.213962"
+                "optimized_at": "2025-12-26T22:26:35.147562"
             }
         },
         "allocation": {
@@ -271,7 +271,7 @@
     },
     "data": {
         "source": "coingecko",
-        "cache_ttl_minutes": 5,
+        "cache_ttl_minutes": 1440,
         "max_historical_days": 365,
         "update_interval_minutes": 5,
         "save_to_database": true
