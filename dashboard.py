@@ -4,10 +4,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
-from database import Database
+from core.database import Database
 import numpy as np
 from typing import Dict, List, Optional
-import calendar
+import asyncio
 
 # --- 1. CONFIGURATION & SETUP ---
 st.set_page_config(
@@ -17,112 +17,82 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM CSS ---
+# Custom CSS for professional dashboard
 st.markdown("""
 <style>
-    /* Global Theme */
     .stApp {
-        background: radial-gradient(circle at 10% 20%, rgb(15, 23, 42) 0%, rgb(8, 15, 30) 90%);
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
         color: #e2e8f0;
     }
-    
-    /* Metrics Cards */
-    .metric-container {
-        display: flex;
-        flex-direction: row;
-        gap: 1rem;
-        flex-wrap: wrap;
-    }
     .metric-card {
-        background: rgba(30, 41, 59, 0.4);
-        border: 1px solid rgba(148, 163, 184, 0.1);
-        backdrop-filter: blur(10px);
-        border-radius: 16px;
-        padding: 24px;
-        flex: 1;
-        min-width: 200px;
+        background: rgba(30, 41, 59, 0.8);
+        border: 1px solid #475569;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 6px 12px -2px rgba(0, 0, 0, 0.3);
         transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
     }
     .metric-card:hover {
-        transform: translateY(-4px);
-        border-color: rgba(56, 189, 248, 0.3);
-        box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
-    }
-    .metric-card::before {
-        content: "";
-        position: absolute;
-        top: 0; left: 0; width: 100%; height: 4px;
-        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-        opacity: 0.5;
+        transform: translateY(-2px);
+        box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.4);
     }
     .metric-value {
-        font-size: 32px;
+        font-size: 28px;
         font-weight: 800;
-        background: linear-gradient(180deg, #fff, #94a3b8);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #ffffff;
         margin-top: 8px;
     }
     .metric-label {
-        font-size: 13px;
+        font-size: 14px;
         color: #94a3b8;
         text-transform: uppercase;
-        letter-spacing: 1px;
-        font-weight: 600;
+        letter-spacing: 0.5px;
     }
-    .metric-delta {
-        font-size: 14px;
-        font-weight: 600;
-        margin-top: 4px;
+    .positive {
+        color: #10b981 !important;
     }
-    .positive { color: #34d399 !important; }
-    .negative { color: #f87171 !important; }
+    .negative {
+        color: #ef4444 !important;
+    }
     
-    /* Tabs */
+    /* Tab styling */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background-color: transparent;
-        padding-bottom: 10px;
+        gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: rgba(30, 41, 59, 0.3);
-        border-radius: 8px;
-        padding: 10px 24px;
-        font-weight: 500;
-        color: #94a3b8;
-        border: 1px solid transparent;
-        transition: all 0.2s;
+        background-color: rgba(30, 41, 59, 0.5);
+        border-radius: 8px 8px 0 0;
+        padding: 12px 24px;
+        font-weight: 600;
     }
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: rgba(59, 130, 246, 0.1);
-        color: #fff;
+    
+    /* Dataframe styling */
+    .dataframe {
+        background-color: rgba(15, 23, 42, 0.7) !important;
     }
-    .stTabs [aria-selected="true"] {
-        background-color: rgba(59, 130, 246, 0.15) !important;
-        border-color: rgba(59, 130, 246, 0.3) !important;
-        color: #60a5fa !important;
+    
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background-color: #0f172a;
+        border-right: 1px solid #334155;
     }
     
     /* Auto-refresh indicator */
     .refresh-indicator {
         display: inline-block;
-        width: 8px;
-        height: 8px;
+        width: 12px;
+        height: 12px;
         border-radius: 50%;
         margin-right: 8px;
-        box-shadow: 0 0 10px currentColor;
     }
     .refresh-active {
         background-color: #10b981;
-        color: #10b981;
         animation: pulse 2s infinite;
     }
     @keyframes pulse {
-        0% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.5; transform: scale(1.2); }
-        100% { opacity: 1; transform: scale(1); }
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -139,11 +109,11 @@ def init_database():
 db = init_database()
 
 # --- 2. SIDEBAR: CONTROLS & FILTERS ---
-st.sidebar.markdown("### 📡 PHOENIX CONTROL")
+st.sidebar.title("📡 PHOENIX CONTROL PANEL")
 
 # Auto-refresh toggle
-auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh", value=True, help="Auto-refresh data")
-refresh_interval = st.sidebar.slider("Refresh interval (s)", 10, 300, 30)
+auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh", value=True, help="Auto-refresh data every 30 seconds")
+refresh_interval = st.sidebar.slider("Refresh interval (seconds)", 10, 300, 30)
 
 # Time range selector
 st.sidebar.markdown("---")
@@ -162,7 +132,7 @@ if time_range == "Custom":
 
 # Strategy selection
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Strategy")
+st.sidebar.subheader("🎯 Strategy Selection")
 
 # Fetch Strategies
 try:
@@ -181,7 +151,7 @@ else:
     # Create mapping for dropdown
     strategy_options = [s['name'] for s in strategies]
     selected_strategy_name = st.sidebar.selectbox(
-        "Select Strategy",
+        "SELECT STRATEGY",
         options=strategy_options,
         index=0 if strategy_options else None
     )
@@ -192,11 +162,12 @@ else:
     
     # Multi-strategy selection for portfolio view
     st.sidebar.markdown("---")
-    show_portfolio = st.sidebar.checkbox("📊 Portfolio View", value=False)
+    st.sidebar.subheader("📊 Portfolio View")
+    show_portfolio = st.sidebar.checkbox("Show Portfolio Summary", value=False)
     
     if show_portfolio:
         selected_strategies = st.sidebar.multiselect(
-            "Filter Portfolio",
+            "Select Strategies for Portfolio",
             options=strategy_options,
             default=[selected_strategy_name] if selected_strategy_name else []
         )
@@ -205,7 +176,7 @@ else:
 
 # System status
 st.sidebar.markdown("---")
-st.sidebar.caption("SYSTEM STATUS")
+st.sidebar.subheader("🖥️ System Status")
 status_col1, status_col2 = st.sidebar.columns(2)
 with status_col1:
     if auto_refresh:
@@ -213,14 +184,14 @@ with status_col1:
     else:
         st.markdown('⏸️ Paused')
 with status_col2:
-    st.markdown(f"**{len(strategies)}** Strategies")
+    st.metric("Strategies", len(strategies))
 
-# --- 3. DATA FETCHING (CACHED) ---
+# --- 3. MAIN DASHBOARD LOGIC ---
 
-@st.cache_data(ttl=15, show_spinner=False)
 def fetch_strategy_data(strategy_id: str) -> Dict:
-    """Fetch all data for a strategy with caching to prevent DB spam."""
+    """Fetch all data for a strategy."""
     data = {}
+    
     try:
         # 1. Cash
         data['cash'] = db.get_strategy_cash(strategy_id)
@@ -245,8 +216,7 @@ def fetch_strategy_data(strategy_id: str) -> Dict:
         data['metrics'] = metrics_res.data
         
     except Exception as e:
-        # Return empty structure on failure to prevent crash
-        return {'cash': 0, 'positions': [], 'trades': [], 'history': [], 'metrics': []}
+        st.error(f"❌ Error fetching data: {e}")
     
     return data
 
@@ -269,8 +239,6 @@ def calculate_portfolio_metrics(strategies_data: Dict[str, Dict]) -> Dict:
         # Get latest equity from history
         if data.get('history'):
             total_equity += data['history'][-1].get('total_equity', 0)
-        else:
-            total_equity += (data.get('cash', 0) + total_positions_value)
         
         # Sum PnL from metrics
         for metric in data.get('metrics', []):
@@ -286,139 +254,215 @@ def calculate_portfolio_metrics(strategies_data: Dict[str, Dict]) -> Dict:
         'strategy_count': len(strategies_data)
     }
 
-# --- 4. HELPER PLOTTING FUNCTIONS ---
-
-def plot_underwater(df_history):
-    """Generates a Drawdown (Underwater) plot."""
-    if df_history.empty:
-        return go.Figure()
-
-    df = df_history.copy()
-    df['peak'] = df['total_equity'].cummax()
-    df['drawdown'] = (df['total_equity'] - df['peak']) / df['peak'] * 100
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], 
-        y=df['drawdown'],
-        fill='tozeroy',
-        mode='lines',
-        line=dict(color='#ef4444', width=1),
-        name='Drawdown'
-    ))
-    fig.update_layout(
-        title='Drawdown (%)',
-        yaxis_title='Drawdown %',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#94a3b8'),
-        height=250,
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    return fig
-
-def plot_pnl_distribution(trades):
-    """Generates a histogram of Trade PnL."""
-    if not trades:
-        return go.Figure()
-        
-    df = pd.DataFrame(trades)
-    if 'profit' not in df.columns:
-        return go.Figure()
-        
-    fig = px.histogram(
-        df, 
-        x="profit", 
-        nbins=20, 
-        title="PnL Distribution",
-        color_discrete_sequence=['#3b82f6']
-    )
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#94a3b8'),
-        xaxis_title="Profit/Loss ($)",
-        yaxis_title="Count",
-        height=250,
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    return fig
-
-# --- 5. MAIN DASHBOARD UI ---
-
+# --- 4. DASHBOARD HEADER ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col1:
-    st.markdown("## 🚀 PHOENIX")
+    st.title("🚀")
+with col2:
+    st.title("PHOENIX TRADING DASHBOARD")
 with col3:
     current_time = datetime.utcnow()
-    st.markdown(f"<div style='text-align: right; color: #64748b; font-family: monospace;'>{current_time.strftime('%Y-%m-%d %H:%M:%S UTC')}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align: right; color: #94a3b8; margin-top: 20px;'>{current_time.strftime('%Y-%m-%d %H:%M:%S UTC')}</div>", unsafe_allow_html=True)
 
 # Auto-refresh logic
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
 
-# --- DISPLAY LOGIC ---
+# --- 5. PORTFOLIO VIEW OR SINGLE STRATEGY VIEW ---
+if show_portfolio and len(selected_strategies) > 1:
+    # PORTFOLIO VIEW
+    st.header("📊 PORTFOLIO SUMMARY")
+    
+    # Fetch data for all selected strategies
+    strategies_data = {}
+    for strat_name in selected_strategies:
+        strat = next((s for s in strategies if s['name'] == strat_name), None)
+        if strat:
+            strategies_data[strat['id']] = fetch_strategy_data(strat['id'])
+    
+    if strategies_data:
+        # Calculate portfolio metrics
+        portfolio_metrics = calculate_portfolio_metrics(strategies_data)
+        
+        # Display portfolio KPIs
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">TOTAL EQUITY</div>
+                <div class="metric-value">${portfolio_metrics['total_equity']:,.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            pnl_class = "positive" if portfolio_metrics['total_pnl'] >= 0 else "negative"
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">TOTAL P&L</div>
+                <div class="metric-value {pnl_class}">${portfolio_metrics['total_pnl']:+,.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">ACTIVE STRATEGIES</div>
+                <div class="metric-value">{portfolio_metrics['strategy_count']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">TOTAL TRADES</div>
+                <div class="metric-value">{portfolio_metrics['total_trades']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Strategy performance comparison chart
+        st.subheader("📈 Strategy Performance Comparison")
+        
+        # Prepare data for comparison chart
+        comparison_data = []
+        for strat_name in selected_strategies:
+            strat = next((s for s in strategies if s['name'] == strat_name), None)
+            if strat and strat['id'] in strategies_data:
+                data = strategies_data[strat['id']]
+                if data.get('history'):
+                    latest_equity = data['history'][-1].get('total_equity', 0)
+                    initial_cash = data.get('cash', 0) + sum(
+                        p['quantity'] * p['entry_price'] for p in data.get('positions', [])
+                    )
+                    return_pct = ((latest_equity - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0
+                    
+                    comparison_data.append({
+                        'Strategy': strat_name,
+                        'Equity': latest_equity,
+                        'Return %': return_pct,
+                        'Trades': len(data.get('trades', [])),
+                        'Positions': len(data.get('positions', []))
+                    })
+        
+        if comparison_data:
+            df_comparison = pd.DataFrame(comparison_data)
+            
+            # Create comparison charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = px.bar(df_comparison, x='Strategy', y='Return %', 
+                            title='Strategy Returns (%)',
+                            color='Return %',
+                            color_continuous_scale='RdYlGn')
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#94a3b8')
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = px.scatter(df_comparison, x='Trades', y='Return %',
+                                size='Equity', color='Strategy',
+                                title='Trades vs Returns',
+                                hover_data=['Strategy', 'Return %', 'Trades', 'Positions'])
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#94a3b8')
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        # Individual strategy tabs
+        st.subheader("📋 Individual Strategy Details")
+        strategy_tabs = st.tabs(selected_strategies)
+        
+        for i, strat_name in enumerate(selected_strategies):
+            with strategy_tabs[i]:
+                strat = next((s for s in strategies if s['name'] == strat_name), None)
+                if strat:
+                    display_strategy_data(strat['id'], strat_name, strategies_data[strat['id']])
+    
+elif selected_strategy_id:
+    # SINGLE STRATEGY VIEW
+    st.header(f"📊 {selected_strategy_name}")
+    
+    # Fetch strategy data
+    with st.spinner(f"Loading data for {selected_strategy_name}..."):
+        strategy_data = fetch_strategy_data(selected_strategy_id)
+    
+    if not strategy_data:
+        st.warning("No data available for this strategy.")
+        st.stop()
+    
+    # Display strategy data
+    display_strategy_data(selected_strategy_id, selected_strategy_name, strategy_data)
+else:
+    st.info("👈 Please select a strategy from the sidebar to begin.")
 
 def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
     """Display data for a single strategy."""
     
     # --- KPI ROW ---
-    cash = data.get('cash', 0)
+    col1, col2, col3, col4 = st.columns(4)
     
-    # Calculate Total Equity
-    positions = data.get('positions', [])
-    positions_value = sum([p['quantity'] * p['entry_price'] for p in positions])
-    total_equity = cash + positions_value
-    
-    # Realized PnL
-    realized_pnl = 0
-    # Prefer summing actual trade profits if available, else use metrics snapshots
-    trades = data.get('trades', [])
-    if trades and 'profit' in trades[0]:
-         realized_pnl = sum([t.get('profit', 0) for t in trades])
-    elif data.get('metrics'):
-        # Fallback to last metric snapshot
-        last_metric = data['metrics'][0]
-        realized_pnl = last_metric.get('total_pnl', 0)
-    
-    pnl_color = "positive" if realized_pnl >= 0 else "negative"
-    
-    # Win Rate
-    closed_trades = [t for t in trades if t.get('side') == 'SELL'] # Assuming sell closes
-    winning_trades = [t for t in closed_trades if t.get('profit', 0) > 0]
-    win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0
-    
-    # HTML Metric Cards
-    st.markdown(f"""
-    <div class="metric-container">
+    with col1:
+        cash = data.get('cash', 0)
+        st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-label">Total Equity</div>
-            <div class="metric-value">${total_equity:,.2f}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">Realized P&L</div>
-            <div class="metric-value {pnl_color}">${realized_pnl:+,.2f}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">Available Cash</div>
+            <div class="metric-label">AVAILABLE CASH</div>
             <div class="metric-value">${cash:,.2f}</div>
         </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        # Calculate Total Equity
+        positions_value = sum([p['quantity'] * p['entry_price'] for p in data.get('positions', [])])
+        total_equity = cash + positions_value
+        
+        st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-label">Win Rate</div>
-            <div class="metric-value">{win_rate:.1f}%</div>
-            <div class="metric-delta">{len(closed_trades)} Trades</div>
+            <div class="metric-label">TOTAL EQUITY</div>
+            <div class="metric-value">${total_equity:,.2f}</div>
         </div>
-    </div>
-    <br>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        # Calculate Realized PnL from closed positions
+        realized_pnl = 0
+        for metric in data.get('metrics', []):
+            if 'total_pnl' in metric and metric['total_pnl']:
+                realized_pnl += metric['total_pnl']
+        
+        pnl_class = "positive" if realized_pnl >= 0 else "negative"
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">REALIZED P&L</div>
+            <div class="metric-value {pnl_class}">${realized_pnl:+,.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        # Calculate Win Rate
+        winning_trades = [t for t in data.get('trades', []) if t.get('side') == 'SELL']
+        total_closed = len(winning_trades)
+        win_rate = (len([t for t in winning_trades if t.get('profit', 0) > 0]) / total_closed * 100) if total_closed > 0 else 0
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">WIN RATE</div>
+            <div class="metric-value">{win_rate:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # --- TABS VIEW ---
     tab_pos, tab_trades, tab_history, tab_analysis = st.tabs([
         "🛡️ POSITIONS", 
         "📜 TRADES", 
         "📈 PERFORMANCE",
-        "🔍 ANALYTICS"
+        "🔍 ANALYSIS"
     ])
     
     # TAB 1: POSITIONS
@@ -426,105 +470,149 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.subheader("Active Holdings")
+            st.subheader("Open Positions")
+            positions = data.get('positions', [])
+            
             if positions:
                 df_positions = pd.DataFrame(positions)
                 
-                # Calculate unrealized PnL (Mocked using entry price)
-                # NOTE: In a real scenario, fetch live price here.
-                df_positions['current_price'] = df_positions['entry_price'] 
-                df_positions['market_value'] = df_positions['quantity'] * df_positions['entry_price']
+                # Calculate unrealized PnL
+                unrealized_pnls = []
+                for pos in positions:
+                    # For now, use entry price as current price (in real system, fetch live prices)
+                    current_price = pos['entry_price']  # This should be replaced with live price
+                    if pos['side'] == 'LONG':
+                        unrealized = (current_price - pos['entry_price']) * pos['quantity']
+                    else:
+                        unrealized = (pos['entry_price'] - current_price) * pos['quantity']
+                    unrealized_pnls.append(unrealized)
                 
-                # Format for display
-                display_df = df_positions[['symbol', 'side', 'quantity', 'entry_price', 'market_value', 'opened_at']].copy()
-                display_df['opened_at'] = pd.to_datetime(display_df['opened_at']).dt.strftime('%m-%d %H:%M')
+                df_positions['unrealized_pnl'] = unrealized_pnls
+                df_positions['unrealized_pnl_pct'] = (df_positions['unrealized_pnl'] / 
+                                                     (df_positions['entry_price'] * df_positions['quantity'])) * 100
                 
+                # Format display
+                display_cols = ['symbol', 'side', 'quantity', 'entry_price', 'unrealized_pnl', 'unrealized_pnl_pct']
                 st.dataframe(
-                    display_df.style.format({
-                        'quantity': '{:.4f}',
+                    df_positions[display_cols].style.format({
+                        'quantity': '{:.6f}',
                         'entry_price': '${:.2f}',
-                        'market_value': '${:,.2f}'
-                    }),
+                        'unrealized_pnl': '${:+,.2f}',
+                        'unrealized_pnl_pct': '{:+.2f}%'
+                    }).apply(
+                        lambda x: ['background-color: rgba(16, 185, 129, 0.1)' if val > 0 else 
+                                 'background-color: rgba(239, 68, 68, 0.1)' for val in x],
+                        subset=['unrealized_pnl', 'unrealized_pnl_pct']
+                    ),
                     use_container_width=True,
                     height=300
                 )
             else:
-                st.info("No active positions currently open.")
+                st.info("No active positions.")
         
         with col2:
-            st.subheader("Exposure Breakdown")
+            st.subheader("Position Summary")
             if positions:
-                # Allocation Pie Chart
+                total_position_value = sum([p['quantity'] * p['entry_price'] for p in positions])
+                avg_position_size = total_position_value / len(positions) if positions else 0
+                
+                st.metric("Total Positions", len(positions))
+                st.metric("Total Exposure", f"${total_position_value:,.2f}")
+                st.metric("Avg Position Size", f"${avg_position_size:,.2f}")
+                
+                # Side distribution
+                long_count = len([p for p in positions if p['side'] == 'LONG'])
+                short_count = len([p for p in positions if p['side'] == 'SHORT'])
+                
                 fig = px.pie(
-                    df_positions, 
-                    values='market_value', 
-                    names='symbol',
-                    hole=0.4,
-                    color_discrete_sequence=px.colors.sequential.Teal
+                    values=[long_count, short_count],
+                    names=['LONG', 'SHORT'],
+                    title='Position Sides',
+                    color_discrete_sequence=['#10b981', '#ef4444']
                 )
                 fig.update_layout(
-                    showlegend=True,
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
                     font=dict(color='#94a3b8'),
-                    margin=dict(t=0, b=0, l=0, r=0),
+                    showlegend=True,
                     height=250
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Summary Stats
-                total_exposure = sum(p['quantity'] * p['entry_price'] for p in positions)
-                leverage = total_exposure / total_equity if total_equity > 0 else 0
-                st.metric("Total Market Value", f"${total_exposure:,.2f}")
-                st.metric("Gross Leverage", f"{leverage:.2f}x")
     
     # TAB 2: TRADES
     with tab_trades:
+        trades = data.get('trades', [])
+        
         if trades:
             df_trades = pd.DataFrame(trades)
             df_trades['executed_at'] = pd.to_datetime(df_trades['executed_at'])
             
-            # Cumulative PnL Chart (if profit column exists)
-            if 'profit' in df_trades.columns:
-                df_trades = df_trades.sort_values('executed_at')
-                df_trades['cum_pnl'] = df_trades['profit'].cumsum()
-                
-                fig_cum = px.area(
-                    df_trades, x='executed_at', y='cum_pnl',
-                    title='Cumulative Realized PnL',
-                    line_shape='hv'
-                )
-                fig_cum.update_traces(line_color='#10b981', fillcolor='rgba(16, 185, 129, 0.1)')
-                fig_cum.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#94a3b8'),
-                    yaxis_title="Profit ($)",
-                    height=300
-                )
-                st.plotly_chart(fig_cum, use_container_width=True)
-
-            # Table
-            st.markdown("##### Trade History")
+            # Add profit/loss coloring
+            def color_profit(val):
+                if val > 0:
+                    return 'color: #10b981'
+                elif val < 0:
+                    return 'color: #ef4444'
+                return ''
+            
+            # Display trades
             display_cols = ['executed_at', 'symbol', 'side', 'quantity', 'price', 'fees']
             if 'profit' in df_trades.columns:
                 display_cols.append('profit')
-                
+            
             st.dataframe(
-                df_trades.sort_values('executed_at', ascending=False)[display_cols].style.format({
+                df_trades[display_cols].sort_values('executed_at', ascending=False).style.format({
+                    'quantity': '{:.6f}',
                     'price': '${:.2f}',
-                    'profit': '${:+.2f}' if 'profit' in df_trades.columns else '{}',
                     'fees': '${:.2f}',
-                    'executed_at': lambda x: x.strftime('%Y-%m-%d %H:%M')
-                }).applymap(
-                    lambda v: 'color: #34d399' if v > 0 else 'color: #f87171', 
-                    subset=['profit'] if 'profit' in df_trades.columns else []
-                ),
+                    'profit': '${:+,.2f}' if 'profit' in df_trades.columns else '${:.2f}',
+                    'executed_at': lambda t: t.strftime('%Y-%m-%d %H:%M')
+                }).applymap(color_profit, subset=['profit'] if 'profit' in df_trades.columns else []),
                 use_container_width=True,
                 height=400
             )
+            
+            # Trade statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                buy_trades = len([t for t in trades if t['side'] == 'BUY'])
+                sell_trades = len([t for t in trades if t['side'] == 'SELL'])
+                st.metric("Buy Trades", buy_trades)
+                st.metric("Sell Trades", sell_trades)
+            
+            with col2:
+                avg_trade_size = df_trades['quantity'].mean() if not df_trades.empty else 0
+                avg_trade_price = df_trades['price'].mean() if not df_trades.empty else 0
+                st.metric("Avg Trade Size", f"{avg_trade_size:.4f}")
+                st.metric("Avg Price", f"${avg_trade_price:.2f}")
+            
+            with col3:
+                total_fees = df_trades['fees'].sum() if 'fees' in df_trades.columns else 0
+                st.metric("Total Fees", f"${total_fees:.2f}")
+            
+            # Trade timeline visualization
+            st.subheader("Trade Timeline")
+            if len(df_trades) > 1:
+                fig = px.scatter(
+                    df_trades, 
+                    x='executed_at', 
+                    y='price', 
+                    color='side',
+                    size='quantity',
+                    title='Trade Execution History',
+                    color_discrete_map={'BUY': '#10b981', 'SELL': '#ef4444'},
+                    hover_data=['quantity', 'symbol', 'fees']
+                )
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#94a3b8'),
+                    xaxis_title="Date",
+                    yaxis_title="Price ($)"
+                )
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No trade history available yet.")
+            st.info("No trade history available.")
     
     # TAB 3: PERFORMANCE
     with tab_history:
@@ -534,186 +622,132 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
             df_history = pd.DataFrame(history)
             df_history['timestamp'] = pd.to_datetime(df_history['timestamp'])
             
-            # Main Equity Curve
+            # Equity curve
+            st.subheader("Equity Curve")
             fig = go.Figure()
+            
             fig.add_trace(go.Scatter(
                 x=df_history['timestamp'],
                 y=df_history['total_equity'],
                 mode='lines',
                 name='Equity',
-                line=dict(color='#3b82f6', width=2),
-                fill='tozeroy',
-                fillcolor='rgba(59, 130, 246, 0.1)'
+                line=dict(color='#3b82f6', width=3)
             ))
             
+            # Add initial capital line
+            if not df_history.empty:
+                initial_equity = df_history['total_equity'].iloc[0]
+                fig.add_hline(
+                    y=initial_equity,
+                    line_dash="dash",
+                    line_color="green",
+                    opacity=0.5,
+                    annotation_text="Initial Capital"
+                )
+            
             fig.update_layout(
-                title='Portfolio Value Growth',
+                title='Portfolio Equity Over Time',
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
                 font=dict(color='#94a3b8'),
-                xaxis_title="Time",
+                xaxis_title="Date",
                 yaxis_title="Equity ($)",
-                hovermode='x unified',
-                height=350
+                hovermode='x unified'
             )
             st.plotly_chart(fig, use_container_width=True)
             
-            col_dd, col_heat = st.columns([1, 1])
+            # Performance metrics table
+            st.subheader("Performance Metrics")
             
-            with col_dd:
-                # Underwater Plot
-                st.plotly_chart(plot_underwater(df_history), use_container_width=True)
+            if not df_history.empty:
+                # Calculate metrics
+                initial = df_history['total_equity'].iloc[0]
+                final = df_history['total_equity'].iloc[-1]
+                total_return = ((final - initial) / initial * 100)
                 
-            with col_heat:
-                # Monthly Returns (Simulated from daily data)
-                if len(df_history) > 1:
-                    df_daily = df_history.set_index('timestamp').resample('D').last().ffill()
-                    df_daily['pct_change'] = df_daily['total_equity'].pct_change() * 100
-                    
-                    # Create a heatmap matrix (Month vs Year)
-                    df_daily['year'] = df_daily.index.year
-                    df_daily['month'] = df_daily.index.month
-                    pivot = df_daily.pivot_table(index='year', columns='month', values='pct_change', aggfunc='sum')
-                    
-                    fig_heat = px.imshow(
-                        pivot, 
-                        labels=dict(x="Month", y="Year", color="Return %"),
-                        x=[calendar.month_abbr[i] for i in range(1, 13)],
-                        color_continuous_scale='RdYlGn',
-                        text_auto='.1f'
-                    )
-                    fig_heat.update_layout(
-                        title="Monthly Returns (%)",
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='#94a3b8'),
-                        height=250
-                    )
-                    st.plotly_chart(fig_heat, use_container_width=True)
+                # Calculate drawdown
+                df_history['peak'] = df_history['total_equity'].cummax()
+                df_history['drawdown'] = (df_history['total_equity'] - df_history['peak']) / df_history['peak'] * 100
+                max_drawdown = df_history['drawdown'].min()
+                
+                # Display metrics
+                metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+                with metrics_col1:
+                    st.metric("Total Return", f"{total_return:.2f}%")
+                    st.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+                with metrics_col2:
+                    # Calculate daily returns (simplified)
+                    if len(df_history) > 1:
+                        daily_returns = df_history['total_equity'].pct_change().dropna()
+                        sharpe_ratio = (daily_returns.mean() / daily_returns.std() * np.sqrt(365)) if daily_returns.std() > 0 else 0
+                        st.metric("Sharpe Ratio", f"{sharpe_ratio:.2f}")
+                    else:
+                        st.metric("Sharpe Ratio", "N/A")
+                with metrics_col3:
+                    winning_days = len([r for r in daily_returns if r > 0]) if 'daily_returns' in locals() else 0
+                    total_days = len(daily_returns) if 'daily_returns' in locals() else 0
+                    win_rate = (winning_days / total_days * 100) if total_days > 0 else 0
+                    st.metric("Win Rate (Days)", f"{win_rate:.1f}%")
         else:
-            st.info("Not enough history to generate performance charts.")
+            st.info("No performance history available.")
     
-    # TAB 4: ANALYTICS
+    # TAB 4: ANALYSIS
     with tab_analysis:
+        st.subheader("Strategy Analysis")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("##### Win/Loss Analysis")
-            if trades and 'profit' in df_trades.columns:
-                st.plotly_chart(plot_pnl_distribution(trades), use_container_width=True)
-                
-                wins = df_trades[df_trades['profit'] > 0]['profit']
-                losses = df_trades[df_trades['profit'] < 0]['profit']
-                
-                avg_win = wins.mean() if not wins.empty else 0
-                avg_loss = losses.mean() if not losses.empty else 0
-                
-                c1, c2 = st.columns(2)
-                c1.metric("Avg Win", f"${avg_win:.2f}")
-                c2.metric("Avg Loss", f"${avg_loss:.2f}")
-                
+            # Risk metrics
+            st.metric("Risk per Trade", f"{data.get('risk_per_trade', '2')}%")
+            st.metric("Max Drawdown Limit", f"{data.get('max_drawdown_limit', '15')}%")
+            st.metric("Consecutive Loss Limit", f"{data.get('max_consecutive_losses', '5')}")
+        
         with col2:
-            st.markdown("##### Risk Gauges")
-            # Calculate Risk Metrics
-            if history:
-                df_h = pd.DataFrame(history)
-                peak = df_h['total_equity'].max()
-                current = df_h['total_equity'].iloc[-1]
-                dd = (peak - current) / peak * 100 if peak > 0 else 0
-                
-                fig_gauge = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = dd,
-                    title = {'text': "Current Drawdown %"},
-                    gauge = {
-                        'axis': {'range': [0, 20]},
-                        'bar': {'color': "#ef4444"},
-                        'steps': [
-                            {'range': [0, 5], 'color': "rgba(16, 185, 129, 0.1)"},
-                            {'range': [5, 10], 'color': "rgba(245, 158, 11, 0.1)"}
-                        ]
+            # Current market exposure
+            positions = data.get('positions', [])
+            total_exposure = sum([p['quantity'] * p['entry_price'] for p in positions])
+            cash = data.get('cash', 0)
+            total_equity = cash + total_exposure
+            exposure_pct = (total_exposure / total_equity * 100) if total_equity > 0 else 0
+            
+            st.metric("Market Exposure", f"{exposure_pct:.1f}%")
+            st.metric("Cash Reserve", f"${cash:,.2f}")
+            
+            # Exposure gauge
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=exposure_pct,
+                title={'text': "Exposure %"},
+                domain={'x': [0, 1], 'y': [0, 1]},
+                gauge={
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': "#3b82f6"},
+                    'steps': [
+                        {'range': [0, 50], 'color': "rgba(16, 185, 129, 0.2)"},
+                        {'range': [50, 80], 'color': "rgba(245, 158, 11, 0.2)"},
+                        {'range': [80, 100], 'color': "rgba(239, 68, 68, 0.2)"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "red", 'width': 4},
+                        'thickness': 0.75,
+                        'value': 80
                     }
-                ))
-                fig_gauge.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#94a3b8'),
-                    height=250,
-                    margin=dict(l=20, r=20, t=30, b=20)
-                )
-                st.plotly_chart(fig_gauge, use_container_width=True)
-
-# --- PORTFOLIO OR SINGLE VIEW LOGIC ---
-
-if show_portfolio and len(selected_strategies) > 0:
-    # PORTFOLIO VIEW
-    st.header("📊 Portfolio Aggregate")
-    
-    # Fetch data
-    strategies_data = {}
-    with st.spinner("Aggregating portfolio data..."):
-        for strat_name in selected_strategies:
-            strat = next((s for s in strategies if s['name'] == strat_name), None)
-            if strat:
-                strategies_data[strat['id']] = fetch_strategy_data(strat['id'])
-    
-    if strategies_data:
-        metrics = calculate_portfolio_metrics(strategies_data)
-        
-        # Portfolio KPIs
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Portfolio Equity", f"${metrics['total_equity']:,.2f}")
-        col2.metric("Total Cash", f"${metrics['total_cash']:,.2f}")
-        col3.metric("Total PnL", f"${metrics['total_pnl']:+,.2f}")
-        col4.metric("Active Strategies", metrics['strategy_count'])
-        
-        st.markdown("---")
-        
-        # Comparison Charts
-        st.subheader("Strategy Comparison")
-        comp_data = []
-        for s_id, data in strategies_data.items():
-            name = next(s['name'] for s in strategies if s['id'] == s_id)
-            equity = data['history'][-1]['total_equity'] if data['history'] else 0
-            trades_count = len(data['trades'])
-            comp_data.append({'Name': name, 'Equity': equity, 'Trades': trades_count})
-            
-        if comp_data:
-            df_comp = pd.DataFrame(comp_data)
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                fig = px.bar(df_comp, x='Name', y='Equity', title="Equity by Strategy", color='Equity', color_continuous_scale='Bluered')
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'))
-                st.plotly_chart(fig, use_container_width=True)
-                
-            with c2:
-                fig = px.pie(df_comp, values='Trades', names='Name', title="Trade Activity Volume")
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'))
-                st.plotly_chart(fig, use_container_width=True)
-
-elif selected_strategy_id:
-    # SINGLE STRATEGY VIEW
-    st.markdown(f"### 🔭 {selected_strategy_name}")
-    
-    with st.spinner(f"Syncing data for {selected_strategy_name}..."):
-        strategy_data = fetch_strategy_data(selected_strategy_id)
-    
-    if strategy_data:
-        display_strategy_data(selected_strategy_id, selected_strategy_name, strategy_data)
-    else:
-        st.error("Failed to load strategy data.")
-
-else:
-    st.info("👈 Please select a strategy to begin.")
+                }
+            ))
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#94a3b8'),
+                height=250
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #475569; font-size: 0.8em;'>"
-    "PHOENIX TRADING SYSTEM v2.0 • "
-    f"Current Session: {uuid.uuid4().hex[:8]}"
+    "<div style='text-align: center; color: #64748b; font-size: 0.9em;'>"
+    "🚀 Phoenix Trading System • v1.0 • "
+    f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     "</div>",
     unsafe_allow_html=True
 )
-
-import uuid # Added for the footer session ID

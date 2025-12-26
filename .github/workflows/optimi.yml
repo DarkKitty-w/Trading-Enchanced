@@ -1,73 +1,44 @@
 name: Phoenix Optimization
 
 on:
-  workflow_dispatch:
-    inputs:
-      strategy:
-        description: "Strategy name (leave empty to use --all)"
-        required: false
-        default: ""
-      trials:
-        description: "Number of Optuna trials"
-        required: true
-        default: "25"
-      extra_args:
-        description: "Extra CLI arguments (optional)"
-        required: false
-        default: ""
+  workflow_dispatch:  # Permet de lancer manuellement depuis GitHub
 
 jobs:
   optimize:
     runs-on: ubuntu-latest
 
     steps:
-    # 1️⃣ Checkout
+    # 1️⃣ Checkout du code
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2️⃣ Setup Python
+    # 2️⃣ Configurer Python
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.12'
 
-    # 3️⃣ Install dependencies
+    # 3️⃣ Installer dépendances
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install optuna
 
-    # 4️⃣ Run optimization
+    # 4️⃣ Lancer l'optimisation et rediriger les logs
     - name: Run optimization
-      env:
-        STRATEGY: ${{ github.event.inputs.strategy }}
-        TRIALS: ${{ github.event.inputs.trials }}
-        EXTRA: ${{ github.event.inputs.extra_args }}
       run: |
         mkdir -p logs
+        python optimize.py 2>&1 | tee logs/optimization.log
 
-        echo "📌 Running Phoenix Optimizer..."
-        echo "➡ Strategy: $STRATEGY"
-        echo "➡ Trials: $TRIALS"
-        echo "➡ Extra Args: $EXTRA"
-
-        if [ -z "$STRATEGY" ]; then
-          # Aucun nom → utiliser --all
-          python optimize.py --all --trials $TRIALS $EXTRA 2>&1 | tee logs/optimization.log
-        else
-          # Optimisation d'une seule stratégie
-          python optimize.py --strategy "$STRATEGY" --trials $TRIALS $EXTRA 2>&1 | tee logs/optimization.log
-        fi
-
-    # 5️⃣ Upload updated config.json
+    # 5️⃣ Upload du config.json mis à jour comme artefact
     - name: Upload updated config.json
       uses: actions/upload-artifact@v4
       with:
         name: optimized-config
         path: config.json
 
-    # 6️⃣ Upload logs
+    # 6️⃣ Upload du log complet comme artefact
     - name: Upload optimization logs
       uses: actions/upload-artifact@v4
       with:

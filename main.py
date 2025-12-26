@@ -1,389 +1,272 @@
 import asyncio
 import logging
 import signal
+import sys
 import json
-import os
-from typing import Dict, List, Optional
-from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
 
-# Imports Tiers
-import ccxt.async_support as ccxt
+# Third-party imports
 from dotenv import load_dotenv
+import pandas as pd
 
-# Imports Projet (Architecture Propre)
-from models import (
-    Portfolio, 
-    Position, 
-    MarketCandle, 
-    Signal, 
-    SignalType, 
-    Trade,
-    PortfolioItem,  # AJOUT: Import manquant
-    TradeRecord     # AJOUT: Import manquant
-)
-from market_data import MarketDataManager
-from database import DatabaseHandler
-from execution import ExecutionManager
-from analytics import AdvancedChartGenerator
-import strategies  # Module dynamique
+# Project imports
+from core.database import Database
+from core.models import Signal, SignalType, PositionSide
+from core.market_data import MarketDataManager
+from core.execution import ExecutionManager 
+import strategies.strategies as strategies
+from datetime import datetime
 
-# Configuration Logging
+# Logging Setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("phoenix_core.log"),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger("PhoenixOrchestrator")
 
 class PhoenixBot:
     """
-    Contrôleur Principal (Orchestrator).
-    
-    Responsabilités :
-    1. Initialiser les services (Data, DB, Exec, Stratégies).
-    2. Boucle d'événements (Tick).
-    3. Router les données : Exchange -> MarketData -> Strategy -> Execution -> DB.
-    
-    Ne contient AUCUNE logique de calcul financier ou statistique.
+    Cloud-Native Orchestrator.
+    Manages the lifecycle of strategies, efficient data fetching, and persists state to Supabase.
     """
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self):
         load_dotenv()
         self.is_running = False
-        self.config = self._load_config(config_path)
         
-        # --- 1. Injection des Services ---
+        # 1. Load Configuration
+        self.config = self._load_config()
         
-        # Base de données (Persistance)
-        self.db = DatabaseHandler()
-        
-        # Gestionnaire de Données Marché (Mémoire Tampon)
-        # Remplace la logique pd.concat lourde
-        self.market_data = MarketDataManager(
-            max_history_size=self.config['system'].get('max_history_size', 1000)
-        )
-        
-        # Gestionnaire d'Exécution (Calculs de risque, Ordres)
-        self.execution = ExecutionManager(self.config)
-        
-        # Moteur d'Analyse (Reporting)
-        self.analytics = AdvancedChartGenerator(
-            output_dir=self.config['system'].get('output_dir', 'logs')
-        )
-        
-        # --- 2. État Interne (Modèles Typés) ---
-        
-        # Le Portfolio est la "Source de Vérité" de l'état financier
-        self.portfolio = self._initialize_portfolio()
-        
-        # Stratégies actives (Mappage Nom -> Instance)
-        self.active_strategies = strategies.get_active_strategies(self.config)
-        
-        # Connecteur Exchange (Initié dans setup)
-        self.exchange: Optional[ccxt.Exchange] = None
-        
-        logger.info(f"🤖 Phoenix Bot initialisé avec {len(self.active_strategies)} stratégies.")
-
-    def _load_config(self, path: str) -> dict:
+        # 2. Connect to Supabase
         try:
-            with open(path, 'r') as f:
-                return json.load(f)
+            self.db = Database()
+            logger.info("✅ Database connected successfully.")
         except Exception as e:
-            logger.critical(f"❌ Configuration illisible : {e}")
-            raise
+            logger.critical(f"❌ Database connection failed: {e}")
+            sys.exit(1)
 
-    def _initialize_portfolio(self) -> Portfolio:
-        """Charge l'état depuis la DB ou crée un nouveau portfolio."""
+        # 3. Initialize Services
+        self.market_data = MarketDataManager(self.config)
+        self.execution = ExecutionManager(self.db, self.config)
+        
+        # 4. Strategy Registry
+        self.strategy_db_ids: Dict[str, str] = {} 
+        self.strategy_instances: Dict[str, Any] = {}
+        
+        self.active_strategies = self.config['strategies']['active_strategies']
+        self.trading_pairs = self.config['trading']['pairs']
+        
+        # 5. Data caching for API optimization
+        self.data_cache: Dict[str, Dict] = {
+            'market_data': {},
+            'last_fetch': {}
+        }
+        self.cache_ttl = 2  # Cache TTL in seconds
+
+    def _load_config(self) -> Dict[str, Any]:
+        """Loads configuration from JSON file."""
         try:
-            # Charge les items de portfolio depuis la DB
-            portfolio_items = self.db.load_portfolio()
-            if portfolio_items and len(portfolio_items) > 0:
-                # Reconstruit le portfolio à partir des items
-                return self._load_portfolio_from_items(portfolio_items)
+            with open('config.json', 'r') as f:
+                config = json.load(f)
+                logger.info("✅ Configuration loaded.")
+                return config
         except Exception as e:
-            logger.warning(f"⚠️ Impossible de charger l'état précédent ({e}). Démarrage à neuf.")
-        
-        # Portfolio vierge
-        return Portfolio(
-            initial_capital=self.config['portfolio']['initial_capital_per_strategy'],
-            current_cash=self.config['portfolio']['initial_capital_per_strategy'],
-            currency=self.config['portfolio']['currency']
-        )
+            logger.critical(f"❌ Failed to load config.json: {e}")
+            sys.exit(1)
 
-    def _load_portfolio_from_items(self, items: List[PortfolioItem]) -> Portfolio:
-        """Reconstruit un objet Portfolio à partir des items de la base de données."""
-        # Trouve l'item le plus récent pour les métadonnées
-        latest_item = max(items, key=lambda x: x.timestamp)
+    async def initialize(self):
+        """Registers strategies and warms up the engine."""
+        logger.info("🚀 Initializing Phoenix Engine...")
         
-        # Récupère toutes les positions ouvertes
-        positions = []
-        for item in items:
-            if item.position_id and item.status == "OPEN":
-                positions.append(
-                    Position(
-                        symbol=item.symbol,
-                        strategy_name=item.strategy_name,
-                        quantity=item.quantity,
-                        entry_price=item.entry_price,
-                        current_price=item.current_price,
-                        entry_time=item.entry_time
-                    )
-                )
+        initial_capital = self.config['portfolio']['initial_capital_per_strategy']
         
-        # Crée et retourne le portfolio
-        portfolio = Portfolio(
-            initial_capital=latest_item.initial_capital,
-            current_cash=latest_item.current_cash,
-            currency=latest_item.currency,
-            positions=positions
-        )
-        
-        # Restaure l'historique des snapshots si disponible
-        for item in items:
-            if item.snapshot_data:
-                portfolio.history_snapshots.append(item.snapshot_data)
-        
-        return portfolio
+        for strat_name in self.active_strategies:
+            try:
+                # 1. Check if strategy Class exists in strategies.py
+                if not hasattr(strategies, strat_name):
+                    raise ValueError(f"Strategy Class '{strat_name}' not found in strategies.py")
+                
+                # 2. Instantiate the Strategy Class
+                StrategyClass = getattr(strategies, strat_name)
+                strategy_instance = StrategyClass(self.config)
+                self.strategy_instances[strat_name] = strategy_instance
 
-    def _convert_portfolio_to_items(self) -> List[PortfolioItem]:
-        """Convertit l'état actuel du portfolio en items pour la base de données."""
-        items = []
-        timestamp = datetime.now(timezone.utc)
-        
-        # Item principal avec l'état global
-        main_item = PortfolioItem(
-            timestamp=timestamp,
-            initial_capital=self.portfolio.initial_capital,
-            current_cash=self.portfolio.current_cash,
-            currency=self.portfolio.currency,
-            total_equity=self.portfolio.total_equity,
-            symbol="GLOBAL",
-            position_id=None,
-            status="SUMMARY"
-        )
-        items.append(main_item)
-        
-        # Items pour chaque position ouverte
-        for pos in self.portfolio.positions:
-            pos_item = PortfolioItem(
-                timestamp=timestamp,
-                initial_capital=self.portfolio.initial_capital,
-                current_cash=self.portfolio.current_cash,
-                currency=self.portfolio.currency,
-                total_equity=self.portfolio.total_equity,
-                symbol=pos.symbol,
-                strategy_name=pos.strategy_name,
-                position_id=id(pos),  # Identifiant unique
-                quantity=pos.quantity,
-                entry_price=pos.entry_price,
-                current_price=pos.current_price,
-                entry_time=pos.entry_time,
-                status="OPEN"
-            )
-            items.append(pos_item)
-        
-        return items
-
-    async def setup(self):
-        """Configuration asynchrone (Connexions API)."""
-        exchange_id = 'binance'  # Configurable
-        exchange_class = getattr(ccxt, exchange_id)
-        
-        self.exchange = exchange_class({
-            'apiKey': os.environ.get('BINANCE_API_KEY'),
-            'secret': os.environ.get('BINANCE_SECRET_KEY'),
-            'timeout': 30000,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'} 
-        })
-        
-        # Chargement des marchés (nécessaire pour les précisions)
-        await self.exchange.load_markets()
-        logger.info("✅ Connexion Exchange établie.")
-
-    async def shutdown(self):
-        """Arrêt propre."""
-        self.is_running = False
-        if self.exchange:
-            await self.exchange.close()
-        
-        # Sauvegarde finale de l'état
-        if self.portfolio:
-            portfolio_items = self._convert_portfolio_to_items()
-            self.db.save_portfolio(portfolio_items)
-            
-        logger.info("👋 Arrêt complet du système.")
+                # 3. Register in Database (Get unique ID)
+                s_id = self.db.register_strategy(strat_name, initial_capital=initial_capital)
+                self.strategy_db_ids[strat_name] = s_id
+                
+                logger.info(f"   ✅ Registered: {strat_name} ({s_id})")
+                
+            except Exception as e:
+                logger.error(f"   ❌ Failed to register {strat_name}: {e}")
+                # Remove from active strategies if registration fails
+                self.active_strategies.remove(strat_name)
 
     async def run(self):
-        """Boucle principale (Event Loop)."""
-        await self.setup()
+        """Main Event Loop."""
+        await self.initialize()
         self.is_running = True
-        
-        pairs = self.config['trading']['pairs']
-        timeframe = self.config['trading']['timeframe']
-        
-        logger.info(f"🚀 Démarrage de la boucle de trading sur {len(pairs)} paires.")
-        
+        logger.info(f"🟢 System Online. Tracking {len(self.trading_pairs)} pairs for {len(self.strategy_instances)} strategies.")
+
         while self.is_running:
-            start_time = datetime.now()
-            
-            # Traitement parallèle des paires avec gestion d'erreurs
-            tasks = []
-            for pair in pairs:
-                task = asyncio.create_task(self._process_pair(pair, timeframe))
-                task.add_done_callback(self._handle_task_exception)
-                tasks.append(task)
-            
-            await asyncio.gather(*tasks)
-            
-            # Synchronisation & Reporting périodique
-            await self._periodic_sync()
-            
-            # Respect du Rate Limit global
-            elapsed = (datetime.now() - start_time).total_seconds()
-            sleep_time = max(1.0, 60.0 - elapsed)  # Attend la prochaine minute environ
-            await asyncio.sleep(sleep_time)
+            try:
+                await self._process_cycle()
+                
+                # Sleep interval based on timeframe
+                timeframe = self.config['trading'].get('timeframe', '1m')
+                sleep_seconds = self._get_sleep_interval(timeframe)
+                
+                logger.debug(f"   ... Cycle complete. Sleeping {sleep_seconds}s.")
+                await asyncio.sleep(sleep_seconds)
 
-    def _handle_task_exception(self, task: asyncio.Task):
-        """Gère les exceptions des tâches asynchrones."""
-        if task.exception():
-            logger.error(f"❌ Erreur dans tâche asynchrone: {task.exception()}")
+            except KeyboardInterrupt:
+                await self.shutdown()
+                break
+            except Exception as e:
+                logger.error(f"⚠️ Unexpected error in main loop: {e}", exc_info=True)
+                await asyncio.sleep(10)
 
-    async def _process_pair(self, symbol: str, timeframe: str):
+    def _get_sleep_interval(self, timeframe: str) -> int:
+        """Determines sleep interval based on trading timeframe."""
+        timeframe_map = {
+            '1m': 60,
+            '5m': 300,
+            '15m': 900,
+            '1h': 3600,
+            '4h': 14400,
+            '1d': 86400
+        }
+        return timeframe_map.get(timeframe, 60)
+
+    async def _process_cycle(self):
         """
-        Logique atomique pour une paire.
-        1. Fetch Market Data
-        2. Update Model
-        3. Run Strategies
-        4. Execute Signals
+        One complete trading cycle:
+        1. Fetch Data Once (Optimization)
+        2. Run Strategies (Logic)
+        3. Execute Signals (Risk & Order Mgmt)
+        4. Log Heartbeat
         """
-        try:
-            # 1. Acquisition de données (IO Bound)
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=100)  # Augmenté pour avoir suffisamment d'historique
-            if not ohlcv or len(ohlcv) < 50:  # Au moins 50 bougies nécessaires
-                logger.debug(f"⏳ Données insuffisantes pour {symbol}")
-                return
+        # --- 1. Batch Data Fetching with Caching ---
+        market_snapshot = {}
+        for pair in self.trading_pairs:
+            df = await self._get_cached_market_data(pair)
+            if df is not None and not df.empty:
+                market_snapshot[pair] = df
 
-            # On prend la dernière bougie clôturée (avant-dernière liste)
-            last_closed = ohlcv[-2] if len(ohlcv) > 1 else ohlcv[-1]
-            current_candle = MarketCandle(
-                timestamp=last_closed[0],
-                symbol=symbol,
-                open=last_closed[1],
-                high=last_closed[2],
-                low=last_closed[3],
-                close=last_closed[4],
-                volume=last_closed[5]
-            )
-
-            # 2. Mise à jour du MarketDataManager
-            self.market_data.add_candle(current_candle)
-            
-            # Mise à jour du prix courant dans le portfolio
-            self.portfolio.update_market_prices({symbol: current_candle.close})
-            
-            # 3. Récupération de l'historique pour les stratégies
-            df_history = self.market_data.get_history_dataframe(symbol, required_rows=50)
-            
-            if df_history is None or df_history.empty:
-                logger.debug(f"⏳ Historique insuffisant pour {symbol}")
-                return
-
-            # 4. Exécution des Stratégies
-            for strategy in self.active_strategies:
-                try:
-                    signal_obj: Signal = strategy.analyze(df_history, self.portfolio)
-                    
-                    if signal_obj.signal_type != SignalType.HOLD:
-                        logger.info(f"💡 Signal détecté: {signal_obj}")
-                        await self._execute_signal(signal_obj, current_candle.close)
-                        
-                except Exception as e:
-                    logger.error(f"⚠️ Erreur stratégie {strategy.name} sur {symbol}: {e}")
-
-        except ccxt.NetworkError as e:
-            logger.warning(f"📡 Erreur réseau sur {symbol}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Erreur critique boucle {symbol}: {e}", exc_info=True)
-
-    async def _execute_signal(self, signal: Signal, current_price: float):
-        """Délègue l'exécution et met à jour le Portfolio."""
-        
-        # 1. Calculs pré-trade
-        execution_plan = self.execution.plan_trade(
-            signal=signal, 
-            portfolio=self.portfolio, 
-            current_price=current_price
-        )
-        
-        if not execution_plan:
+        if not market_snapshot:
+            logger.warning("⚠️ No market data received this cycle.")
             return
 
-        # 2. Envoi Ordre Exchange
-        try:
-            logger.info(f"⚡ Exécution ordre {signal.signal_type} sur {signal.symbol}")
+        # --- 2. Strategy Execution Loop ---
+        for strat_name, strat_instance in self.strategy_instances.items():
+            strat_id = self.strategy_db_ids.get(strat_name)
+            if not strat_id:
+                logger.warning(f"⚠️ No DB ID found for strategy: {strat_name}")
+                continue
             
-            # 3. Mise à jour du Modèle Portfolio
-            if signal.signal_type == SignalType.BUY:
-                new_pos = Position(
-                    symbol=signal.symbol,
-                    strategy_name=signal.strategy_name,
-                    quantity=execution_plan['quantity'],
-                    entry_price=current_price,
-                    current_price=current_price
-                )
-                self.portfolio.add_position(new_pos)
-                self.portfolio.current_cash -= (execution_plan['quantity'] * current_price)
+            # Fetch all open positions for this strategy
+            open_positions = self.db.get_strategy_positions(strat_id, status="OPEN")
+            
+            # Iterate through all available market data
+            for pair, df in market_snapshot.items():
                 
-            elif signal.signal_type == SignalType.SELL:
-                # Clôture Position
-                trade: Trade = self.portfolio.close_position(signal.symbol, current_price)
+                # Get current price (last close) for Execution/Logging
+                current_price = df.iloc[-1]['close']
+                current_time = df.iloc[-1]['timestamp']
                 
-                # Convertir et sauvegarder le trade
-                trade_record = TradeRecord(
-                    timestamp=datetime.now(timezone.utc),
-                    symbol=trade.symbol,
-                    strategy_name=trade.strategy_name,
-                    side="SELL",
-                    quantity=trade.quantity,
-                    entry_price=trade.entry_price,
-                    exit_price=trade.exit_price,
-                    pnl=trade.pnl,
-                    pnl_percent=trade.pnl_percent
-                )
-                self.db.record_trade(trade_record)
+                # Check if we already have a position for this pair
+                current_pos = next((p for p in open_positions if p['symbol'] == pair), None)
+                
+                # --- Heartbeat: Log Unrealized PnL ---
+                if current_pos:
+                    await self._log_heartbeat(strat_id, current_pos, current_price, current_time)
 
-            # 4. Sauvegarde État Portfolio
-            portfolio_items = self._convert_portfolio_to_items()
-            self.db.save_portfolio(portfolio_items)
+                # --- Run Strategy Logic ---
+                try:
+                    # Pass the DataFrame to the strategy instance
+                    signal = strat_instance.generate_signal(df, pair)
+                    
+                    if signal and signal.signal_type != SignalType.HOLD:
+                        # --- 3. Execute Signal ---
+                        logger.info(f"🔔 {strat_name} on {pair}: {signal.signal_type}")
+                        await self.execution.process_signal(strat_id, signal, current_price)
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error running {strat_name} on {pair}: {e}", exc_info=True)
 
-        except Exception as e:
-            logger.error(f"💥 Échec exécution ordre: {e}")
-
-    async def _periodic_sync(self):
-        """Tâches de fond périodiques."""
+    async def _get_cached_market_data(self, symbol: str) -> Optional[pd.DataFrame]:
+        """
+        Fetches market data with caching to reduce API calls.
+        """
+        cache_key = f"{symbol}_{self.config['trading'].get('timeframe', '1m')}"
+        current_time = datetime.now()
+        
+        # Check cache
+        if cache_key in self.data_cache['market_data']:
+            cache_time = self.data_cache['last_fetch'].get(cache_key)
+            if cache_time and (current_time - cache_time).seconds < self.cache_ttl:
+                return self.data_cache['market_data'][cache_key]
+        
+        # Fetch new data
         try:
-            # Snapshot des performances
-            snapshot = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "total_equity": float(self.portfolio.total_equity),
-                "cash": float(self.portfolio.current_cash),
-                "positions_count": len(self.portfolio.positions),
-                "unrealized_pnl": float(self.portfolio.unrealized_pnl),
-                "realized_pnl": float(self.portfolio.realized_pnl)
-            }
-            self.portfolio.history_snapshots.append(snapshot)
-            self.db.save_portfolio_history(snapshot)
+            df = await self.market_data.get_latest_candle(symbol)
+            if df is not None and not df.empty:
+                self.data_cache['market_data'][cache_key] = df
+                self.data_cache['last_fetch'][cache_key] = current_time
+            return df
+        except Exception as e:
+            logger.error(f"❌ Error fetching data for {symbol}: {e}")
+            return None
+
+    async def _log_heartbeat(self, strategy_id: str, position: Dict, current_price: float, current_time: datetime):
+        """
+        Calculates and logs unrealized PnL.
+        """
+        try:
+            entry_price = float(position['entry_price'])
+            quantity = float(position['quantity'])
+            side = position['side']
+            
+            if side == PositionSide.LONG:
+                unrealized_pnl = (current_price - entry_price) * quantity
+            else:  # SHORT
+                unrealized_pnl = (entry_price - current_price) * quantity
+                
+            # Calculate return percentage
+            position_value = entry_price * quantity
+            return_pct = (unrealized_pnl / position_value) * 100 if position_value > 0 else 0
+            
+            # Log to database
+            self.db.log_performance(strategy_id, {
+                "unrealized_pnl": unrealized_pnl,
+                "asset": position['symbol'],
+                "price": current_price,
+                "return_pct": return_pct,
+                "timestamp": current_time.isoformat()
+            })
+            
+            # Log to console (optional, for debugging)
+            logger.debug(f"💓 {position['symbol']}: Unrealized PnL: ${unrealized_pnl:.2f} ({return_pct:.2f}%)")
             
         except Exception as e:
-            logger.error(f"⚠️ Erreur sync périodique: {e}")
+            logger.error(f"❌ Failed to log heartbeat for {strategy_id}: {e}")
 
-# ==============================================================================
-# Point d'entrée
-# ==============================================================================
+    async def shutdown(self):
+        """Graceful Shutdown."""
+        self.is_running = False
+        logger.info("🛑 Shutting down Phoenix Orchestrator...")
+        
+        # Close any open positions (optional)
+        for strat_name, strat_id in self.strategy_db_ids.items():
+            positions = self.db.get_strategy_positions(strat_id, status="OPEN")
+            if positions:
+                logger.info(f"⚠️ {strat_name} has {len(positions)} open position(s) on shutdown")
+        
+        logger.info("👋 Goodbye.")
+        sys.exit(0)
 
 if __name__ == "__main__":
     bot = PhoenixBot()
@@ -391,17 +274,17 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Gestion propre des signaux (CTRL+C)
-    def handle_exit():
-        logger.info("🛑 Signal d'arrêt reçu...")
+    def handle_exit(signum, frame):
+        print(f"\n🛑 Received signal {signum}, shutting down...")
         asyncio.create_task(bot.shutdown())
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, handle_exit)
         
+    signal.signal(signal.SIGINT, handle_exit)
+    signal.signal(signal.SIGTERM, handle_exit)
+
     try:
         loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
-        pass
+        print("\n🛑 Manual shutdown requested")
+        loop.run_until_complete(bot.shutdown())
     finally:
         loop.close()
