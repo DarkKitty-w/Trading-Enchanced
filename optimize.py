@@ -137,7 +137,7 @@ class PhoenixOptimizer:
         final_score = total_score / valid_runs
         return final_score
 
-    def run_optimization(self, strategy_name: str, n_trials=50, fast_mode=False):
+    def run_optimization(self, strategy_name: str, n_trials=100, fast_mode=False):
         """Lance l'optimisation Optuna."""
         if strategy_name not in self.strategy_map:
             print(f"{Color.RED}❌ Stratégie inconnue: {strategy_name}{Color.RESET}")
@@ -360,6 +360,10 @@ class PhoenixOptimizer:
                 if confirm == 'y':
                     for s_name in self.strategy_map.keys():
                         self.run_optimization(s_name, n_trials=20, fast_mode=True)
+                        print(f"\n{Color.GRAY}{'─'*50}{Color.RESET}")
+                else:
+                    for s_name in self.strategy_map.keys():
+                        self.run_optimization(s_name, n_trials=100, fast_mode=False)
                         print(f"\n{Color.GRAY}{'─'*50}{Color.RESET}")
             elif choice == '3':
                 s_name = input("Strategy name > ").strip()
