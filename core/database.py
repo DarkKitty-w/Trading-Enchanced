@@ -41,7 +41,7 @@ class Database:
     # 1. STRATEGY MANAGEMENT
     # ------------------------------------------------------------------
 
-    def register_strategy(self, name: str, initial_cash: float = 10000.0) -> str:
+    def register_strategy(self, name: str, initial_capital: float = 10000.0) -> str:
         """
         Registers a strategy. If it exists, returns its ID.
         If it's new, creates it and initializes its cash wallet.
@@ -62,8 +62,8 @@ class Database:
             # 3. Initialize Cash
             self.client.table("strategy_cash").insert({
                 "strategy_id": strategy_id,
-                "initial_cash": initial_cash,
-                "available_cash": initial_cash
+                "initial_cash": initial_capital,
+                "available_cash": initial_capital
             }).execute()
 
             print(f"🆕 Strategy '{name}' created: {strategy_id}")
