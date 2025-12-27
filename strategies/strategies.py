@@ -191,23 +191,25 @@ class MeanReversion(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "period": trial.suggest_int("period", 15, 40),
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.97, 0.995),
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.005, 1.03),
-            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.005, 0.02)
+            # Wider exploration for better optimization
+            "period": trial.suggest_int("period", 10, 60),  # Wider range
+            "buy_threshold": trial.suggest_float("buy_threshold", 0.95, 0.998),  # Wider: 0.5% to 5% below
+            "sell_threshold": trial.suggest_float("sell_threshold", 1.002, 1.05),  # Wider: 0.2% to 5% above
+            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.03)  # Wider range
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            "period": (10, 60, 'int'),
-            "buy_threshold": (0.95, 0.998, 'float'),
-            "sell_threshold": (1.002, 1.05, 'float'),
-            "min_volatility_filter": (0.0, 0.03, 'float')
+            # Validation bounds (should be wider than or equal to Optuna ranges)
+            "period": (8, 100, 'int'),  # Even wider for manual tuning
+            "buy_threshold": (0.90, 0.999, 'float'),  # 0.1% to 10% below
+            "sell_threshold": (1.001, 1.10, 'float'),  # 0.1% to 10% above
+            "min_volatility_filter": (0.0, 0.05, 'float')
         }
 
     def min_data_required(self) -> int:
-        return self.params['period'] + 10
+        return self.params['period'] + 20  # More buffer
 
 class MA_Enhanced(Strategy):
     @classmethod
@@ -310,21 +312,23 @@ class MA_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "short_window": trial.suggest_int("short_window", 5, 20),
-            "long_window": trial.suggest_int("long_window", 20, 60),
-            "crossover_threshold": trial.suggest_float("crossover_threshold", 0.0, 0.003),
-            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.0, 0.02),
-            "trend_confirmation_candles": trial.suggest_int("trend_confirmation_candles", 1, 3)
+            # Wider ranges for better exploration
+            "short_window": trial.suggest_int("short_window", 5, 50),  # Wider
+            "long_window": trial.suggest_int("long_window", 15, 100),  # Wider
+            "crossover_threshold": trial.suggest_float("crossover_threshold", 0.0, 0.01),  # Wider
+            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.0, 0.04),  # Wider
+            "trend_confirmation_candles": trial.suggest_int("trend_confirmation_candles", 1, 5)
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            "short_window": (5, 30, 'int'),
-            "long_window": (10, 100, 'int'),
-            "volatility_threshold": (0.0, 0.03, 'float'),
-            "crossover_threshold": (0.0, 0.01, 'float'),
-            "trend_confirmation_candles": (1, 5, 'int')
+            # Even wider validation bounds
+            "short_window": (3, 100, 'int'),
+            "long_window": (10, 200, 'int'),
+            "volatility_threshold": (0.0, 0.10, 'float'),  # Much wider for different markets
+            "crossover_threshold": (0.0, 0.05, 'float'),
+            "trend_confirmation_candles": (1, 10, 'int')
         }
         
     @classmethod
@@ -333,7 +337,7 @@ class MA_Enhanced(Strategy):
             raise ValueError("Short window must be < Long window")
 
     def min_data_required(self) -> int:
-        return max(self.params['long_window'], self.params['short_window']) + 10
+        return max(self.params['long_window'], self.params['short_window']) + 20
 
 class Momentum_Enhanced(Strategy):
     @classmethod
@@ -425,23 +429,25 @@ class Momentum_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "period": trial.suggest_int("period", 7, 21), 
-            "threshold": trial.suggest_float("threshold", 0.01, 0.05),
-            "min_volatility": trial.suggest_float("min_volatility", 0.005, 0.02),
-            "confirmation_period": trial.suggest_int("confirmation_period", 1, 3)
+            # Wider exploration ranges
+            "period": trial.suggest_int("period", 5, 40),  # Wider
+            "threshold": trial.suggest_float("threshold", 0.005, 0.10),  # Wider: 0.5% to 10%
+            "min_volatility": trial.suggest_float("min_volatility", 0.0, 0.04),  # Wider
+            "confirmation_period": trial.suggest_int("confirmation_period", 1, 5)  # Wider
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            "period": (5, 30, 'int'), 
-            "threshold": (0.005, 0.08, 'float'),
-            "min_volatility": (0.0, 0.03, 'float'),
-            "confirmation_period": (1, 5, 'int')
+            # Very wide validation bounds for different market conditions
+            "period": (3, 60, 'int'),
+            "threshold": (0.002, 0.20, 'float'),  # 0.2% to 20% momentum
+            "min_volatility": (0.0, 0.08, 'float'),
+            "confirmation_period": (1, 10, 'int')
         }
     
     def min_data_required(self) -> int:
-        return max(self.params['period'], self.params.get('confirmation_period', 1)) + 10
+        return max(self.params['period'], self.params.get('confirmation_period', 1)) + 20
 
 class MeanReversion_Pro(Strategy):
     """
@@ -515,31 +521,33 @@ class MeanReversion_Pro(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "period": trial.suggest_int("period", 15, 30),
-            "rsi_period": trial.suggest_int("rsi_period", 10, 20),
-            "rsi_oversold": trial.suggest_int("rsi_oversold", 25, 35),
-            "rsi_overbought": trial.suggest_int("rsi_overbought", 65, 75),
-            "std_dev": trial.suggest_float("std_dev", 1.8, 2.5),
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.97, 0.995),
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.005, 1.03),
-            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.005, 0.02)
+            # Balanced exploration ranges
+            "period": trial.suggest_int("period", 10, 60),
+            "rsi_period": trial.suggest_int("rsi_period", 7, 28),
+            "rsi_oversold": trial.suggest_int("rsi_oversold", 20, 45),  # Wider
+            "rsi_overbought": trial.suggest_int("rsi_overbought", 55, 85),  # Wider
+            "std_dev": trial.suggest_float("std_dev", 1.5, 3.5),  # Wider
+            "buy_threshold": trial.suggest_float("buy_threshold", 0.92, 1.0),  # Much wider
+            "sell_threshold": trial.suggest_float("sell_threshold", 1.0, 1.08),  # Wider
+            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.04)  # Wider
         }
         
     @staticmethod
     def get_param_bounds():
         return {
-            "period": (10, 50, 'int'),
-            "rsi_period": (7, 25, 'int'),
-            "rsi_oversold": (20, 40, 'int'),
-            "rsi_overbought": (60, 80, 'int'),
-            "std_dev": (1.5, 3.0, 'float'),
-            "buy_threshold": (0.95, 1.0, 'float'),
-            "sell_threshold": (1.0, 1.05, 'float'),
-            "min_volatility_filter": (0.0, 0.03, 'float')
+            # Very wide validation bounds
+            "period": (8, 100, 'int'),
+            "rsi_period": (5, 35, 'int'),
+            "rsi_oversold": (15, 50, 'int'),
+            "rsi_overbought": (50, 90, 'int'),
+            "std_dev": (1.0, 4.0, 'float'),
+            "buy_threshold": (0.85, 1.0, 'float'),  # 0-15% below lower band
+            "sell_threshold": (1.0, 1.15, 'float'),  # 0-15% above upper band
+            "min_volatility_filter": (0.0, 0.06, 'float')
         }
 
     def min_data_required(self) -> int:
-        return max(self.params['period'], self.params['rsi_period']) + 10
+        return max(self.params['period'], self.params['rsi_period']) + 20
 
 class MA_Momentum_Hybrid(Strategy):
     """
@@ -630,25 +638,27 @@ class MA_Momentum_Hybrid(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "short_window": trial.suggest_int("short_window", 5, 15),
-            "long_window": trial.suggest_int("long_window", 20, 50),
-            "momentum_period": trial.suggest_int("momentum_period", 8, 18),
-            "momentum_threshold": trial.suggest_float("momentum_threshold", 0.01, 0.04),
-            "confirmation_candles": trial.suggest_int("confirmation_candles", 1, 3)
+            # Wider exploration
+            "short_window": trial.suggest_int("short_window", 5, 30),
+            "long_window": trial.suggest_int("long_window", 15, 80),
+            "momentum_period": trial.suggest_int("momentum_period", 5, 30),
+            "momentum_threshold": trial.suggest_float("momentum_threshold", 0.005, 0.08),  # Wider
+            "confirmation_candles": trial.suggest_int("confirmation_candles", 1, 5)  # Wider
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            "short_window": (5, 25, 'int'),
-            "long_window": (15, 80, 'int'),
-            "momentum_period": (5, 25, 'int'),
-            "momentum_threshold": (0.005, 0.06, 'float'),
-            "confirmation_candles": (1, 5, 'int')
+            # Very wide bounds for flexibility
+            "short_window": (3, 50, 'int'),
+            "long_window": (10, 150, 'int'),
+            "momentum_period": (3, 40, 'int'),
+            "momentum_threshold": (0.002, 0.15, 'float'),  # 0.2% to 15%
+            "confirmation_candles": (1, 10, 'int')
         }
     
     def min_data_required(self) -> int:
-        return max(self.params['long_window'], self.params['momentum_period']) + 10
+        return max(self.params['long_window'], self.params['momentum_period']) + 20
 
 class Volatility_Regime_Adaptive(Strategy):
     """
@@ -727,27 +737,29 @@ class Volatility_Regime_Adaptive(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            "lookback": trial.suggest_int("lookback", 30, 80),
-            "vol_threshold": trial.suggest_float("vol_threshold", 0.008, 0.02),
-            "regime_low_entry_pct": trial.suggest_float("regime_low_entry_pct", 0.005, 0.015),
-            "regime_high_entry_pct": trial.suggest_float("regime_high_entry_pct", 0.015, 0.035),
-            "ma_period": trial.suggest_int("ma_period", 15, 40),
-            "confirmation_candles": trial.suggest_int("confirmation_candles", 1, 3)
+            # Wider exploration for adaptive strategy
+            "lookback": trial.suggest_int("lookback", 20, 100),
+            "vol_threshold": trial.suggest_float("vol_threshold", 0.005, 0.04),  # Much wider
+            "regime_low_entry_pct": trial.suggest_float("regime_low_entry_pct", 0.002, 0.03),  # Wider
+            "regime_high_entry_pct": trial.suggest_float("regime_high_entry_pct", 0.01, 0.06),  # Wider
+            "ma_period": trial.suggest_int("ma_period", 10, 80),
+            "confirmation_candles": trial.suggest_int("confirmation_candles", 1, 5)
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            "lookback": (20, 100, 'int'),
-            "vol_threshold": (0.005, 0.03, 'float'),
-            "regime_low_entry_pct": (0.002, 0.025, 'float'),
-            "regime_high_entry_pct": (0.01, 0.05, 'float'),
-            "ma_period": (10, 60, 'int'),
-            "confirmation_candles": (1, 5, 'int')
+            # Very wide bounds for different market conditions
+            "lookback": (10, 150, 'int'),
+            "vol_threshold": (0.002, 0.08, 'float'),  # 0.2% to 8% volatility threshold
+            "regime_low_entry_pct": (0.001, 0.05, 'float'),  # 0.1% to 5%
+            "regime_high_entry_pct": (0.005, 0.10, 'float'),  # 0.5% to 10%
+            "ma_period": (5, 120, 'int'),
+            "confirmation_candles": (1, 10, 'int')
         }
     
     def min_data_required(self) -> int:
-        return max(self.params['lookback'], self.params['ma_period']) + 10
+        return max(self.params['lookback'], self.params['ma_period']) + 20
 
 # Registry
 STRATEGIES_REGISTRY = {
