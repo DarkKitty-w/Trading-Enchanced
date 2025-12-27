@@ -30,6 +30,9 @@ class ExecutionManager:
         self.min_notional = float(exec_conf.get('min_notional_usd', 10.0))
         
         # --- Risk Settings ---
+        # Store config for per-strategy lookups
+        self.config = config
+        # Load DEFAULT risk settings (will be overridden per strategy)
         risk_conf = config.get('risk_management', {}).get('global_settings', {})
         self.risk_per_trade = float(risk_conf.get('risk_per_trade_pct', 0.02)) / 100
         self.min_cash_pct = float(risk_conf.get('min_cash_pct', 0.1))
@@ -43,8 +46,6 @@ class ExecutionManager:
 
     def _get_strategy_risk_setting(self, strategy_id: str, setting_name: str) -> float:
         """Get risk setting for a strategy, checking per_strategy first then global."""
-        strategy_name = self.db.get_strategy_name(strategy_id)  # Need to add this to Database class
-
         # Check per_strategy settings first
         per_strategy = self.config.get('risk_management', {}).get('per_strategy', {})
         if strategy_name in per_strategy and setting_name in per_strategy[strategy_name]:
@@ -148,7 +149,7 @@ class ExecutionManager:
         """Handles Buy Orders: Sizing, Risk Check, DB Updates."""
         
         # 1. Calculate Position Size (Risk Management)
-        amount_usd = self.calculate_position_size(cash, volatility)
+        amount_usd = self.calculate_position_size(signal.strategy_name, cash, volatility)
         
         # Check Min Notional
         if amount_usd < self.min_notional:
@@ -296,10 +297,16 @@ class ExecutionManager:
         else:  # quantity
             return round(value, 6)
 
-    def calculate_position_size(self, strategy_cash: float, volatility: float) -> float:
+    def calculate_position_size(self, strategy_name: str, strategy_cash: float, volatility: float) -> float:
         """
         Determines trade size based on risk settings and volatility.
         """
+        # Get risk per trade for THIS strategy
+        risk_per_trade = self._get_strategy_risk_setting(strategy_name, 'risk_per_trade_pct') / 100
+        max_portfolio_exposure = self._get_strategy_risk_setting(strategy_name, 'max_portfolio_exposure_pct') / 100
+
+        base_size = strategy_cash * risk_per_trade
+
         # Base: % of available capital
         base_size = strategy_cash * self.risk_per_trade
         
