@@ -41,6 +41,19 @@ class ExecutionManager:
         
         logger.info(f"✅ ExecutionManager initialized. Fee: {self.fee_rate*100}%, Risk/Trade: {self.risk_per_trade*100}%")
 
+    def _get_strategy_risk_setting(self, strategy_id: str, setting_name: str) -> float:
+        """Get risk setting for a strategy, checking per_strategy first then global."""
+        strategy_name = self.db.get_strategy_name(strategy_id)  # Need to add this to Database class
+
+        # Check per_strategy settings first
+        per_strategy = self.config.get('risk_management', {}).get('per_strategy', {})
+        if strategy_name in per_strategy and setting_name in per_strategy[strategy_name]:
+            return float(per_strategy[strategy_name][setting_name])
+
+        # Fall back to global settings
+        global_settings = self.config.get('risk_management', {}).get('global_settings', {})
+        return float(global_settings.get(setting_name, 0.0))
+
     async def process_signal(self, strategy_id: str, signal: Signal, current_price: float):
         """
         Main entry point called by the Orchestrator.
@@ -102,6 +115,32 @@ class ExecutionManager:
             logger.warning(f"   ⚠️ {strategy_id} has {loss_count} consecutive losses. Stopping trading.")
             return False
         
+        # 5. Check maximum drawdown (if available)
+        try:
+            max_drawdown_pct = self._get_strategy_risk_setting(strategy_id, 'max_drawdown_stop_trading_pct')
+            if max_drawdown_pct > 0:
+                # Get current drawdown from database
+                current_drawdown = self.db.get_current_drawdown(strategy_id)
+                if current_drawdown is not None and current_drawdown >= max_drawdown_pct:
+                    logger.warning(f"   ⚠️ {strategy_id} at {current_drawdown:.1f}% drawdown, exceeds limit {max_drawdown_pct:.1f}%")
+                    return False
+        except Exception as e:
+            logger.error(f"Error checking drawdown: {e}")
+        
+        # 6. Simple correlation check: Don't have too many crypto positions
+        if signal.signal_type == SignalType.BUY:
+            # Count existing crypto positions
+            crypto_count = 0
+            for pos in positions:
+                if '/' in pos['symbol'] and 'USD' in pos['symbol']:
+                    crypto_count += 1
+            
+            # Simple rule: Max 5 crypto positions
+                max_crypto_positions = 5
+                if crypto_count >= max_crypto_positions:
+                    logger.info(f"⚠️ Max crypto positions ({max_crypto_positions}) reached")
+                    return False
+
         return True
 
     async def _execute_buy(self, strategy_id: str, signal: Signal, price: float, 
@@ -118,16 +157,25 @@ class ExecutionManager:
 
         # 2. Calculate Realistic Execution Price (Slippage + Spread)
         exec_price = self.get_realistic_price(price, "BUY", volatility)
-        
-        # 3. Calculate Quantity
-        net_usd = amount_usd / (1 + self.fee_rate)
-        quantity = net_usd / exec_price
-        
-        # Apply precision rules if available
+
+        # FIX: Clarify that amount_usd is maximum RISK amount (what we could lose)
+        # We want to spend this amount INCLUDING fees
+        max_total_cost = amount_usd  # This is the total we're willing to spend
+
+        # Calculate maximum gross cost (asset value before fees)
+        # max_total_cost = gross_cost + fees
+        # max_total_cost = gross_cost + (gross_cost * fee_rate)
+        # max_total_cost = gross_cost * (1 + fee_rate)
+        max_gross_cost = max_total_cost / (1 + self.fee_rate)
+
+        # Calculate quantity based on maximum gross cost
+        quantity = max_gross_cost / exec_price
+
+        # Apply precision rules
         quantity = self._apply_precision(signal.symbol, quantity, "quantity")
         exec_price = self._apply_precision(signal.symbol, exec_price, "price")
-        
-        # Calculate precise costs
+
+        # Recalculate actual costs with precise quantities
         gross_cost = quantity * exec_price
         fees = self.calculate_fees(gross_cost)
         total_cost = gross_cost + fees
@@ -255,11 +303,12 @@ class ExecutionManager:
         # Base: % of available capital
         base_size = strategy_cash * self.risk_per_trade
         
-        # Volatility Adjustment: Reduce size if volatility is high
-        vol_scalar = 1.0
-        if volatility > 0.02:  # Threshold 2%
-            vol_scalar = 0.02 / volatility
-            
+        # FIX: Volatility Adjustment - Reduce size when volatility is HIGH
+        # If volatility is 2% (0.02), scalar = 1.0 (full size)
+        # If volatility is 4% (0.04), scalar = 0.5 (half size)
+        vol_scalar = 0.02 / max(volatility, 0.001)  # Prevent division by zero
+        vol_scalar = min(1.0, max(0.2, vol_scalar))  # Keep between 20% and 100%
+
         final_size = base_size * vol_scalar
         
         # Safety Cap: Never use more than max exposure percentage
