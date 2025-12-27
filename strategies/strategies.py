@@ -159,32 +159,33 @@ class MeanReversion(Strategy):
         
         mean = df['close'].rolling(window=period).mean().iloc[-1]
         current_price = df['close'].iloc[-1]
-        
-        # Calculate volatility
+
+        # Volatility filter
         min_vol = self.params.get('min_volatility_filter', 0.0)
-        current_vol = 0.0
-        
         if min_vol > 0:
             current_vol = self._calculate_volatility(df['close'], period).iloc[-1]
             if np.isnan(current_vol) or current_vol < min_vol:
                 return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
-
-        # Mean reversion logic
-        if current_price < mean * self.params['buy_threshold']:
+        
+        # FIX: Only generate signals if we have ENOUGH movement
+        price_deviation = (current_price - mean) / mean
+        
+        # REVERSED LOGIC: Buy when oversold, Sell when overbought
+        if price_deviation < -(1 - self.params['buy_threshold']):  # Price significantly below mean
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.BUY, 
                 strategy_name=self.name, 
                 metadata={'volatility': float(current_vol)}
             )
-        elif current_price > mean * self.params['sell_threshold']:
+        elif price_deviation > (self.params['sell_threshold'] - 1):  # Price significantly above mean
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.SELL, 
                 strategy_name=self.name, 
                 metadata={'volatility': float(current_vol)}
             )
-            
+        
         return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
 
     @staticmethod
@@ -199,10 +200,10 @@ class MeanReversion(Strategy):
     @staticmethod
     def get_param_bounds():
         return {
-            "period": (10, 200, 'int'),
-            "buy_threshold": (0.90, 0.999, 'float'),
-            "sell_threshold": (1.001, 1.20, 'float'),
-            "min_volatility_filter": (0.0, 0.05, 'float')
+            "period": (10, 50, 'int'),  # Reduced from 200
+            "buy_threshold": (0.97, 0.995, 'float'),  # 0.5% to 3% below mean
+            "sell_threshold": (1.005, 1.05, 'float'),  # 0.5% to 5% above mean
+            "min_volatility_filter": (0.0, 0.02, 'float')  # Reduced from 0.05
         }
 
     def min_data_required(self) -> int:
