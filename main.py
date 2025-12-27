@@ -64,7 +64,7 @@ class PhoenixBot:
             'market_data': {},
             'last_fetch': {}
         }
-        self.cache_ttl = 2  # Cache TTL in seconds
+        self.cache_ttl = self._get_cache_ttl(self.config['trading'].get('timeframe', '5m'))  # Cache TTL in seconds
 
     def _load_config(self) -> Dict[str, Any]:
         """Loads configuration from JSON file."""
@@ -141,6 +141,18 @@ class PhoenixBot:
         }
         return timeframe_map.get(timeframe, 60)
 
+    def _get_cache_ttl(self, timeframe: str) -> int:
+        """Determines cache TTL based on trading timeframe."""
+        timeframe_map = {
+            '1m': 30,      # 30 seconds for 1m data
+            '5m': 150,     # 2.5 minutes for 5m data
+            '15m': 450,    # 7.5 minutes for 15m data
+            '1h': 1800,    # 30 minutes for 1h data
+            '4h': 7200,    # 2 hours for 4h data
+            '1d': 86400,   # 1 day for daily data
+        }
+        return timeframe_map.get(timeframe, 150)  # Default 2.5 minutes
+
     async def _process_cycle(self):
         """
         One complete trading cycle:
@@ -172,6 +184,11 @@ class PhoenixBot:
             
             # Iterate through all available market data
             for pair, df in market_snapshot.items():
+
+                # FIX: Check if we have enough data for this strategy
+                if len(df) < strat_instance.min_data_required():
+                    logger.debug(f"Skipping {strat_name} on {pair}: insufficient data ({len(df)} < {strat_instance.min_data_required()})")
+                    continue
                 
                 # Get current price (last close) for Execution/Logging
                 current_price = df.iloc[-1]['close']
