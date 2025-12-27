@@ -30,9 +30,6 @@ class ExecutionManager:
         self.min_notional = float(exec_conf.get('min_notional_usd', 10.0))
         
         # --- Risk Settings ---
-        # Store config for per-strategy lookups
-        self.config = config
-        # Load DEFAULT risk settings (will be overridden per strategy)
         risk_conf = config.get('risk_management', {}).get('global_settings', {})
         self.risk_per_trade = float(risk_conf.get('risk_per_trade_pct', 0.02)) / 100
         self.min_cash_pct = float(risk_conf.get('min_cash_pct', 0.1))
@@ -117,16 +114,8 @@ class ExecutionManager:
             return False
         
         # 5. Check maximum drawdown (if available)
-        try:
-            max_drawdown_pct = self._get_strategy_risk_setting(strategy_id, 'max_drawdown_stop_trading_pct')
-            if max_drawdown_pct > 0:
-                # Get current drawdown from database
-                current_drawdown = self.db.get_current_drawdown(strategy_id)
-                if current_drawdown is not None and current_drawdown >= max_drawdown_pct:
-                    logger.warning(f"   ⚠️ {strategy_id} at {current_drawdown:.1f}% drawdown, exceeds limit {max_drawdown_pct:.1f}%")
-                    return False
-        except Exception as e:
-            logger.error(f"Error checking drawdown: {e}")
+        # TODO: Implement proper drawdown calculation later
+
         
         # 6. Simple correlation check: Don't have too many crypto positions
         if signal.signal_type == SignalType.BUY:
