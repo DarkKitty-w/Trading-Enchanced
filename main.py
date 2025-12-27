@@ -109,9 +109,23 @@ class PhoenixBot:
         """Main Event Loop."""
         await self.initialize()
         self.is_running = True
+
+        # ADD: Start time for max runtime check
+        from datetime import datetime
+        start_time = datetime.now()
+        max_runtime_seconds = self.config['system']['max_runtime_minutes'] * 60
+
         logger.info(f"🟢 System Online. Tracking {len(self.trading_pairs)} pairs for {len(self.strategy_instances)} strategies.")
+        logger.info(f"⏰ Max runtime: {self.config['system']['max_runtime_minutes']} minutes")
 
         while self.is_running:
+            # ADD: Check max runtime
+            elapsed = (datetime.now() - start_time).total_seconds()
+            if elapsed > max_runtime_seconds:
+                logger.info(f"🕒 Max runtime of {self.config['system']['max_runtime_minutes']} minutes reached. Shutting down.")
+                await self.shutdown()
+                break
+            
             try:
                 await self._process_cycle()
                 
