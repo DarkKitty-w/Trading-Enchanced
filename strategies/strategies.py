@@ -206,7 +206,7 @@ class MeanReversion(Strategy):
         }
 
     def min_data_required(self) -> int:
-    return self.params['period'] + 5
+        return self.params['period'] + 5
 
 class MA_Enhanced(Strategy):
     @classmethod
@@ -331,7 +331,7 @@ class MA_Enhanced(Strategy):
             raise ValueError("Short window must be < Long window")
 
     def min_data_required(self) -> int:
-    return max(self.params['long_window'], self.params['short_window']) + 5
+        return max(self.params['long_window'], self.params['short_window']) + 5
 
 class Momentum_Enhanced(Strategy):
     @classmethod
@@ -439,7 +439,7 @@ class Momentum_Enhanced(Strategy):
         }
     
     def min_data_required(self) -> int:
-    return max(self.params['period'], self.params.get('confirmation_period', 1)) + 5
+        return max(self.params['period'], self.params.get('confirmation_period', 1)) + 5
 
 class MeanReversion_Pro(Strategy):
     """
@@ -536,7 +536,7 @@ class MeanReversion_Pro(Strategy):
         }
 
     def min_data_required(self) -> int:
-    return max(self.params['period'], self.params['rsi_period']) + 5
+        return max(self.params['period'], self.params['rsi_period']) + 5
 
 class MA_Momentum_Hybrid(Strategy):
     """
@@ -645,7 +645,7 @@ class MA_Momentum_Hybrid(Strategy):
         }
     
     def min_data_required(self) -> int:
-    return max(self.params['long_window'], self.params['momentum_period']) + 5
+        return max(self.params['long_window'], self.params['momentum_period']) + 5
 
 class Volatility_Regime_Adaptive(Strategy):
     """
@@ -744,7 +744,7 @@ class Volatility_Regime_Adaptive(Strategy):
         }
     
     def min_data_required(self) -> int:
-    return max(self.params['lookback'], self.params['ma_period']) + 5
+        return max(self.params['lookback'], self.params['ma_period']) + 5
 
 # Registry
 STRATEGIES_REGISTRY = {
