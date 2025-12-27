@@ -39,11 +39,11 @@ class Strategy(ABC):
         self._cache.clear()
 
     def min_data_required(self) -> int:
-    """
-    Return minimum candles needed for valid signals.
-    Each strategy should override this.
-    """
-    return 50  # Conservative default
+        """
+        Return minimum candles needed for valid signals.
+        Each strategy should override this.
+        """
+        return 50  # Conservative default
 
     @abstractmethod
     def generate_signal(self, data: pd.DataFrame, symbol: str) -> Signal:
