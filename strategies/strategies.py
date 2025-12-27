@@ -38,6 +38,13 @@ class Strategy(ABC):
     def clear_cache(self):
         self._cache.clear()
 
+    def min_data_required(self) -> int:
+    """
+    Return minimum candles needed for valid signals.
+    Each strategy should override this.
+    """
+    return 50  # Conservative default
+
     @abstractmethod
     def generate_signal(self, data: pd.DataFrame, symbol: str) -> Signal:
         """
@@ -198,6 +205,9 @@ class MeanReversion(Strategy):
             "min_volatility_filter": (0.0, 0.05, 'float')
         }
 
+    def min_data_required(self) -> int:
+    return self.params['period'] + 5
+
 class MA_Enhanced(Strategy):
     @classmethod
     def get_safe_defaults(cls):
@@ -234,13 +244,50 @@ class MA_Enhanced(Strategy):
         
         # Trend confirmation
         trend_confirmation = self.params.get('trend_confirmation_candles', 1)
+        crossover_thresh = self.params.get('crossover_threshold', 0.0)
+
+        if len(sma_short) < 2 or len(sma_long) < 2:
+            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
+        
+        # Get current and previous values
+        short_now = sma_short.iloc[-1]
+        short_prev = sma_short.iloc[-2]
+        long_now = sma_long.iloc[-1]
+        long_prev = sma_long.iloc[-2]
+
+        # Check for ACTUAL crossover (lines crossing each other)
         if trend_confirmation > 1:
-            # Check if trend is consistent for last N candles
-            short_above_long = (sma_short > sma_long).iloc[-trend_confirmation:].all()
-            short_below_long = (sma_short < sma_long).iloc[-trend_confirmation:].all()
+            # For multiple candle confirmation, check if crossover happened and persisted
+            golden_cross = False
+            death_cross = False
+
+            # Look back for crossover in the last N candles
+            for i in range(-trend_confirmation, 0):
+                if i <= -len(sma_short) or i <= -len(sma_long):
+                    break
+                
+                short_i = sma_short.iloc[i]
+                short_i_prev = sma_short.iloc[i-1] if i-1 >= -len(sma_short) else short_i
+                long_i = sma_long.iloc[i]
+                long_i_prev = sma_long.iloc[i-1] if i-1 >= -len(sma_long) else long_i
+                
+                # Check if crossover happened at candle i
+                if (short_i_prev <= long_i_prev) and (short_i > long_i):
+                    golden_cross = True
+                if (short_i_prev >= long_i_prev) and (short_i < long_i):
+                    death_cross = True
+                    
+            short_above_long = golden_cross
+            short_below_long = death_cross
+        
         else:
-            short_above_long = current_short > current_long * (1 + crossover_thresh)
-            short_below_long = current_short < current_long * (1 - crossover_thresh)
+            # Single candle: Check for recent crossover
+            golden_cross = (short_prev <= long_prev) and (short_now > long_now * (1 + crossover_thresh))
+            death_cross = (short_prev >= long_prev) and (short_now < long_now * (1 - crossover_thresh))
+
+            short_above_long = golden_cross
+            short_below_long = death_cross
+
         
         if short_above_long:
             return Signal(
@@ -283,6 +330,9 @@ class MA_Enhanced(Strategy):
         if params['short_window'] >= params['long_window']:
             raise ValueError("Short window must be < Long window")
 
+    def min_data_required(self) -> int:
+    return max(self.params['long_window'], self.params['short_window']) + 5
+
 class Momentum_Enhanced(Strategy):
     @classmethod
     def get_safe_defaults(cls):
@@ -301,13 +351,17 @@ class Momentum_Enhanced(Strategy):
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
             
         # Calculate momentum
-        prev = df['close'].iloc[-(period+1)]
-        curr = df['close'].iloc[-1]
+        if len(df) < period + 1:
+            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
+        prev = df['close'].iloc[-period]  # FIX: period candles ago, not period+1
+        curr = df['close'].iloc[-1]
+
         if prev == 0: 
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
         momentum = (curr / prev) - 1
+
         threshold = self.params['threshold']
         
         # Volatility filter
@@ -383,6 +437,9 @@ class Momentum_Enhanced(Strategy):
             "min_volatility": (0.0, 0.05, 'float'),
             "confirmation_period": (1, 5, 'int')
         }
+    
+    def min_data_required(self) -> int:
+    return max(self.params['period'], self.params.get('confirmation_period', 1)) + 5
 
 class MeanReversion_Pro(Strategy):
     """
@@ -430,16 +487,19 @@ class MeanReversion_Pro(Strategy):
         # 2. Logic (Confluence)
         # Buy: Price drops below Lower Band AND RSI is Oversold
         buy_threshold = self.params.get('buy_threshold', 0.98)
+        # FIX: Price should be below lower band, and buy_threshold < 1 makes it even stricter
+        # For buy_threshold=0.98, price must be below 98% of lower band (more oversold)
         if current_price < current_lower * buy_threshold and current_rsi < self.params['rsi_oversold']:
-             return Signal(
-                 symbol=symbol, 
-                 signal_type=SignalType.BUY, 
-                 strategy_name=self.name, 
-                 metadata={'volatility': float(vol)}
-             )
+            return Signal(
+                symbol=symbol, 
+                signal_type=SignalType.BUY, 
+                strategy_name=self.name, 
+                metadata={'volatility': float(vol)}
+            )
              
         # Sell: Price spikes above Upper Band AND RSI is Overbought
         sell_threshold = self.params.get('sell_threshold', 1.02)
+        # FIX: sell_threshold > 1 means price must be above 102% of upper band (more overbought)
         if current_price > current_upper * sell_threshold and current_rsi > self.params['rsi_overbought']:
              return Signal(
                  symbol=symbol, 
@@ -474,6 +534,9 @@ class MeanReversion_Pro(Strategy):
             "sell_threshold": (1.0, 1.1, 'float'),
             "min_volatility_filter": (0.0, 0.05, 'float')
         }
+
+    def min_data_required(self) -> int:
+    return max(self.params['period'], self.params['rsi_period']) + 5
 
 class MA_Momentum_Hybrid(Strategy):
     """
@@ -580,6 +643,9 @@ class MA_Momentum_Hybrid(Strategy):
             "momentum_threshold": (0.0, 0.10, 'float'),
             "confirmation_candles": (1, 5, 'int')
         }
+    
+    def min_data_required(self) -> int:
+    return max(self.params['long_window'], self.params['momentum_period']) + 5
 
 class Volatility_Regime_Adaptive(Strategy):
     """
@@ -676,6 +742,9 @@ class Volatility_Regime_Adaptive(Strategy):
             "ma_period": (10, 100, 'int'),
             "confirmation_candles": (1, 5, 'int')
         }
+    
+    def min_data_required(self) -> int:
+    return max(self.params['lookback'], self.params['ma_period']) + 5
 
 # Registry
 STRATEGIES_REGISTRY = {
