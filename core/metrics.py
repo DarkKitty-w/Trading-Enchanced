@@ -13,24 +13,17 @@ class FinancialMetrics:
     def calculate(portfolio_history: List[Dict], trades_log: List[Dict], risk_free_rate: float = 0.0) -> Dict[str, Any]:
         """
         Calcule l'ensemble des métriques de performance.
-        
-        Args:
-            portfolio_history: Liste de dicts {'timestamp', 'equity', ...}
-            trades_log: Liste de dicts {'profit', 'return_pct', ...}
-            risk_free_rate: Taux sans risque (pour Sharpe)
-            
-        Returns:
-            Dictionnaire contenant Sharpe, Sortino, Drawdown, Win Rate, etc.
         """
         results = {
             "total_return": 0.0,
+            "total_return_pct": 0.0,
             "sharpe_ratio": 0.0,
             "sortino_ratio": 0.0,
             "max_drawdown": 0.0,
             "win_rate": 0.0,
-            "total_trades": len(trades_log),
+            "total_trades": 0,
             "profit_factor": 0.0,
-            "avg_trade_return": 0.0
+            "avg_win_loss_ratio": 0.0
         }
 
         # --- 1. Analyse Portfolio (Equity Curve) ---
@@ -38,66 +31,70 @@ class FinancialMetrics:
             return results
 
         df = pd.DataFrame(portfolio_history)
-        
-        # Harmonisation des clés (equity vs total_equity)
         if 'equity' not in df.columns:
             if 'total_equity' in df.columns:
                 df['equity'] = df['total_equity']
             else:
-                return results # Impossible de calculer
-        
-        # Calcul des retours périodiques
+                return results
+
+        if df.empty or len(df) < 2:
+            return results
+
         df['pct_change'] = df['equity'].pct_change().fillna(0)
         
-        # 1. Total Return
         initial_equity = df['equity'].iloc[0]
         final_equity = df['equity'].iloc[-1]
         if initial_equity > 0:
             results['total_return'] = (final_equity - initial_equity) / initial_equity
+            results['total_return_pct'] = results['total_return'] * 100
 
-        # 2. Max Drawdown
         df['cummax'] = df['equity'].cummax()
         df['drawdown'] = (df['equity'] - df['cummax']) / df['cummax']
-        results['max_drawdown'] = df['drawdown'].min() # Sera négatif
+        results['max_drawdown'] = df['drawdown'].min()
 
-        # 3. Sharpe Ratio
         mean_return = df['pct_change'].mean()
         std_return = df['pct_change'].std()
         
         if std_return > 0:
-            # Note: Sans connaître la fréquence exacte (1h, 4h, 1d), 
-            # on fournit un Sharpe par période (ex: par bougie).
-            # Pour annualiser, il faudrait multiplier par sqrt(N_periodes_par_an).
-            # Ici, on normalise simplement par la racine de l'échantillon pour la stabilité.
-            results['sharpe_ratio'] = (mean_return - risk_free_rate) / std_return * np.sqrt(len(df))
+            # Assuming daily returns for annualization
+            annualization_factor = np.sqrt(252) # Assuming 252 trading days in a year
+            results['sharpe_ratio'] = (mean_return / std_return) * annualization_factor
 
-        # 4. Sortino Ratio (Downside Deviation)
         negative_returns = df.loc[df['pct_change'] < 0, 'pct_change']
         if not negative_returns.empty:
             downside_std = negative_returns.std()
             if downside_std > 0:
-                 results['sortino_ratio'] = (mean_return - risk_free_rate) / downside_std * np.sqrt(len(df))
+                 results['sortino_ratio'] = (mean_return / downside_std) * annualization_factor
 
         # --- 2. Analyse des Trades ---
         if trades_log:
-            trades_df = pd.DataFrame(trades_log)
+            # Filter for SELL trades, which contain the profit information for a round trip
+            sell_trades = [t for t in trades_log if t.get('side') == 'SELL' and 'profit' in t]
+            results['total_trades'] = len(sell_trades)
             
-            # Win Rate
-            winners = trades_df[trades_df['profit'] > 0]
-            losers = trades_df[trades_df['profit'] <= 0]
-            
-            results['win_rate'] = len(winners) / len(trades_df)
-            
-            # Profit Factor
-            gross_profit = winners['profit'].sum()
-            gross_loss = abs(losers['profit'].sum())
-            
-            if gross_loss > 0:
-                results['profit_factor'] = gross_profit / gross_loss
-            else:
-                results['profit_factor'] = float('inf') if gross_profit > 0 else 0.0
+            if sell_trades:
+                trades_df = pd.DataFrame(sell_trades)
                 
-            # Avg Return
-            results['avg_trade_return'] = trades_df['return_pct'].mean()
+                winners = trades_df[trades_df['profit'] > 0]
+                losers = trades_df[trades_df['profit'] <= 0]
+                
+                if not trades_df.empty:
+                    results['win_rate'] = len(winners) / len(trades_df)
+                
+                gross_profit = winners['profit'].sum()
+                gross_loss = abs(losers['profit'].sum())
+                
+                if gross_loss > 0:
+                    results['profit_factor'] = gross_profit / gross_loss
+                else:
+                    results['profit_factor'] = float('inf') if gross_profit > 0 else 1.0
 
+                if not winners.empty and not losers.empty:
+                    avg_win = gross_profit / len(winners)
+                    avg_loss = gross_loss / len(losers)
+                    if avg_loss > 0:
+                        results['avg_win_loss_ratio'] = avg_win / avg_loss
+                elif not winners.empty:
+                    results['avg_win_loss_ratio'] = float('inf')
+        
         return results

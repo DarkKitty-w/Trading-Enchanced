@@ -145,8 +145,7 @@ class MeanReversion(Strategy):
     def get_safe_defaults(cls):
         return {
             "period": 20, 
-            "buy_threshold": 0.98, 
-            "sell_threshold": 1.02, 
+            "deviation_threshold": 0.02,  # 2% deviation from mean for signals
             "min_volatility_filter": 0.01
         }
     
@@ -154,36 +153,60 @@ class MeanReversion(Strategy):
         df = data.copy()
         
         period = self.params['period']
+        deviation_threshold = self.params['deviation_threshold']
+        
         if len(df) < period:
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
+        # Calculate moving mean and current price
         mean = df['close'].rolling(window=period).mean().iloc[-1]
         current_price = df['close'].iloc[-1]
-
+        
+        # FIX: Calculate volatility unconditionally
+        current_vol = self._calculate_volatility(df['close'], period).iloc[-1] if len(df) >= period else 0.0
+        
         # Volatility filter
         min_vol = self.params.get('min_volatility_filter', 0.0)
         if min_vol > 0:
-            current_vol = self._calculate_volatility(df['close'], period).iloc[-1]
             if np.isnan(current_vol) or current_vol < min_vol:
                 return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
-        # FIX: Only generate signals if we have ENOUGH movement
+        # Calculate percentage deviation from mean
+        if mean == 0:  # Avoid division by zero
+            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
+        
         price_deviation = (current_price - mean) / mean
         
-        # REVERSED LOGIC: Buy when oversold, Sell when overbought
-        if price_deviation < -(1 - self.params['buy_threshold']):  # Price significantly below mean
+        # SIMPLIFIED LOGIC: 
+        # Buy when price is SIGNIFICANTLY BELOW the mean (oversold)
+        # Sell when price is SIGNIFICANTLY ABOVE the mean (overbought)
+        
+        # Buy signal: Price is at least deviation_threshold BELOW the mean
+        if price_deviation < -deviation_threshold:
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.BUY, 
                 strategy_name=self.name, 
-                metadata={'volatility': float(current_vol)}
+                metadata={
+                    'volatility': float(current_vol),
+                    'price_deviation': float(price_deviation),
+                    'mean_price': float(mean),
+                    'current_price': float(current_price)
+                }
             )
-        elif price_deviation > (self.params['sell_threshold'] - 1):  # Price significantly above mean
+        
+        # Sell signal: Price is at least deviation_threshold ABOVE the mean
+        elif price_deviation > deviation_threshold:
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.SELL, 
                 strategy_name=self.name, 
-                metadata={'volatility': float(current_vol)}
+                metadata={
+                    'volatility': float(current_vol),
+                    'price_deviation': float(price_deviation),
+                    'mean_price': float(mean),
+                    'current_price': float(current_price)
+                }
             )
         
         return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
@@ -191,25 +214,23 @@ class MeanReversion(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            # Wider exploration for better optimization
-            "period": trial.suggest_int("period", 10, 60),  # Wider range
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.95, 0.998),  # Wider: 0.5% to 5% below
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.002, 1.05),  # Wider: 0.2% to 5% above
-            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.03)  # Wider range
+            # Simpler and more intuitive parameter exploration
+            "period": trial.suggest_int("period", 10, 60),
+            "deviation_threshold": trial.suggest_float("deviation_threshold", 0.005, 0.10),  # 0.5% to 10%
+            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.03)
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            # Validation bounds (should be wider than or equal to Optuna ranges)
-            "period": (8, 100, 'int'),  # Even wider for manual tuning
-            "buy_threshold": (0.90, 0.999, 'float'),  # 0.1% to 10% below
-            "sell_threshold": (1.001, 1.10, 'float'),  # 0.1% to 10% above
+            # Clear and intuitive parameter bounds
+            "period": (8, 100, 'int'),
+            "deviation_threshold": (0.002, 0.20, 'float'),  # 0.2% to 20% deviation
             "min_volatility_filter": (0.0, 0.05, 'float')
         }
 
     def min_data_required(self) -> int:
-        return self.params['period'] + 20  # More buffer
+        return self.params['period'] + 20
 
 class MA_Enhanced(Strategy):
     @classmethod
@@ -219,7 +240,8 @@ class MA_Enhanced(Strategy):
             "long_window": 30, 
             "volatility_threshold": 0.005, 
             "crossover_threshold": 0.001,
-            "trend_confirmation_candles": 2
+            "trend_confirmation_candles": 2,
+            "volatility_period": None  # Will use long_window if None
         }
     
     def generate_signal(self, data: pd.DataFrame, symbol: str) -> Signal:
@@ -231,40 +253,57 @@ class MA_Enhanced(Strategy):
         if len(df) < long_w + 5:
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
 
+        # Calculate MAs
         sma_short = df['close'].rolling(window=short_w).mean()
         sma_long = df['close'].rolling(window=long_w).mean()
         
         current_short = sma_short.iloc[-1]
         current_long = sma_long.iloc[-1]
-        crossover_thresh = self.params.get('crossover_threshold', 0.0)
+        
+        # FIX 1: Calculate volatility unconditionally to avoid UnboundLocalError
+        # FIX 2: Use adaptive volatility period (default to long_window)
+        vol_period = self.params.get('volatility_period')
+        if vol_period is None:
+            vol_period = long_w  # Use long window as default
+        
+        vol = self._calculate_volatility(df['close'], vol_period).iloc[-1]
         
         # Volatility filter
         vol_threshold = self.params.get('volatility_threshold', 0.0)
         if vol_threshold > 0:
-            vol = self._calculate_volatility(df['close'], 20).iloc[-1]
             if np.isnan(vol) or vol < vol_threshold:
                 return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
-        # Trend confirmation
+        # FIX 3: Rewritten confirmation logic
         trend_confirmation = self.params.get('trend_confirmation_candles', 1)
-        crossover_thresh = self.params.get('crossover_threshold', 0.0)
-
+        crossover_threshold = self.params.get('crossover_threshold', 0.0)
+        
         if len(sma_short) < 2 or len(sma_long) < 2:
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
-        # Get current and previous values
-        short_now = sma_short.iloc[-1]
-        short_prev = sma_short.iloc[-2]
-        long_now = sma_long.iloc[-1]
-        long_prev = sma_long.iloc[-2]
-
-        # Check for ACTUAL crossover (lines crossing each other)
+        # Get recent values for analysis
+        recent_short = sma_short.iloc[-trend_confirmation:]
+        recent_long = sma_long.iloc[-trend_confirmation:]
+        
+        # Calculate the percentage difference between MAs for each candle
+        ma_diff_pct = (recent_short - recent_long) / recent_long
+        
+        # Check for BUY signal (Golden Cross with confirmation)
+        buy_conditions = []
+        
+        # Condition 1: Recent crossover (current candle or last candle)
+        current_cross = sma_short.iloc[-1] > sma_long.iloc[-1] * (1 + crossover_threshold)
+        previous_cross = sma_short.iloc[-2] <= sma_long.iloc[-2] * (1 + crossover_threshold)
+        just_crossed = current_cross and previous_cross
+        
+        # Condition 2: Short MA has been consistently above Long MA for confirmation period
         if trend_confirmation > 1:
-            # For multiple candle confirmation, check if crossover happened and persisted
-            golden_cross = False
-            death_cross = False
-
-            # Look back for crossover in the last N candles
+            # For multi-candle confirmation, check if short MA has been above long MA for N candles
+            consistent_uptrend = all(ma_diff_pct > 0)
+            
+            # Alternative: Check if the crossover happened in the last N candles and trend persisted
+            # Look back for when the crossover might have occurred
+            crossover_found = False
             for i in range(-trend_confirmation, 0):
                 if i <= -len(sma_short) or i <= -len(sma_long):
                     break
@@ -276,35 +315,96 @@ class MA_Enhanced(Strategy):
                 
                 # Check if crossover happened at candle i
                 if (short_i_prev <= long_i_prev) and (short_i > long_i):
-                    golden_cross = True
-                if (short_i_prev >= long_i_prev) and (short_i < long_i):
-                    death_cross = True
-                    
-            short_above_long = golden_cross
-            short_below_long = death_cross
-        
+                    crossover_found = True
+                    # After crossover, check if trend persisted until current candle
+                    persistent = True
+                    for j in range(i, 0):
+                        if j <= -len(sma_short) or j <= -len(sma_long):
+                            break
+                        if sma_short.iloc[j] <= sma_long.iloc[j]:
+                            persistent = False
+                            break
+                    buy_conditions.append(crossover_found and persistent)
+                    break
+            
+            # Also accept if we have a fresh crossover with trend confirmation
+            fresh_cross_with_trend = just_crossed and consistent_uptrend
+            
+            buy_signal = any(buy_conditions) or fresh_cross_with_trend
         else:
-            # Single candle: Check for recent crossover
-            golden_cross = (short_prev <= long_prev) and (short_now > long_now * (1 + crossover_thresh))
-            death_cross = (short_prev >= long_prev) and (short_now < long_now * (1 - crossover_thresh))
-
-            short_above_long = golden_cross
-            short_below_long = death_cross
-
+            # Single candle: Just check for fresh crossover
+            buy_signal = just_crossed
         
-        if short_above_long:
+        # Check for SELL signal (Death Cross with confirmation)
+        sell_conditions = []
+        
+        # Condition 1: Recent crossover (current candle or last candle)
+        current_cross_sell = sma_short.iloc[-1] < sma_long.iloc[-1] * (1 - crossover_threshold)
+        previous_cross_sell = sma_short.iloc[-2] >= sma_long.iloc[-2] * (1 - crossover_threshold)
+        just_crossed_sell = current_cross_sell and previous_cross_sell
+        
+        # Condition 2: Short MA has been consistently below Long MA for confirmation period
+        if trend_confirmation > 1:
+            # For multi-candle confirmation, check if short MA has been below long MA for N candles
+            consistent_downtrend = all(ma_diff_pct < 0)
+            
+            # Look back for when the crossover might have occurred
+            crossover_found_sell = False
+            for i in range(-trend_confirmation, 0):
+                if i <= -len(sma_short) or i <= -len(sma_long):
+                    break
+                
+                short_i = sma_short.iloc[i]
+                short_i_prev = sma_short.iloc[i-1] if i-1 >= -len(sma_short) else short_i
+                long_i = sma_long.iloc[i]
+                long_i_prev = sma_long.iloc[i-1] if i-1 >= -len(sma_long) else long_i
+                
+                # Check if death cross happened at candle i
+                if (short_i_prev >= long_i_prev) and (short_i < long_i):
+                    crossover_found_sell = True
+                    # After crossover, check if trend persisted until current candle
+                    persistent_sell = True
+                    for j in range(i, 0):
+                        if j <= -len(sma_short) or j <= -len(sma_long):
+                            break
+                        if sma_short.iloc[j] >= sma_long.iloc[j]:
+                            persistent_sell = False
+                            break
+                    sell_conditions.append(crossover_found_sell and persistent_sell)
+                    break
+            
+            # Also accept if we have a fresh crossover with trend confirmation
+            fresh_cross_with_trend_sell = just_crossed_sell and consistent_downtrend
+            
+            sell_signal = any(sell_conditions) or fresh_cross_with_trend_sell
+        else:
+            # Single candle: Just check for fresh crossover
+            sell_signal = just_crossed_sell
+        
+        # Generate signals
+        if buy_signal:
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.BUY, 
                 strategy_name=self.name, 
-                metadata={'volatility': float(vol) if vol_threshold > 0 else 0.02}
+                metadata={
+                    'volatility': float(vol),
+                    'short_ma': float(current_short),
+                    'long_ma': float(current_long),
+                    'ma_diff_pct': float(ma_diff_pct.iloc[-1] if trend_confirmation > 0 else 0)
+                }
             )
-        elif short_below_long:
+        elif sell_signal:
             return Signal(
                 symbol=symbol, 
                 signal_type=SignalType.SELL, 
                 strategy_name=self.name, 
-                metadata={'volatility': float(vol) if vol_threshold > 0 else 0.02}
+                metadata={
+                    'volatility': float(vol),
+                    'short_ma': float(current_short),
+                    'long_ma': float(current_long),
+                    'ma_diff_pct': float(ma_diff_pct.iloc[-1] if trend_confirmation > 0 else 0)
+                }
             )
             
         return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
@@ -312,32 +412,36 @@ class MA_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            # Wider ranges for better exploration
-            "short_window": trial.suggest_int("short_window", 5, 50),  # Wider
-            "long_window": trial.suggest_int("long_window", 15, 100),  # Wider
-            "crossover_threshold": trial.suggest_float("crossover_threshold", 0.0, 0.01),  # Wider
-            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.0, 0.04),  # Wider
-            "trend_confirmation_candles": trial.suggest_int("trend_confirmation_candles", 1, 5)
+            "short_window": trial.suggest_int("short_window", 5, 30),
+            "long_window": trial.suggest_int("long_window", 15, 60),
+            "crossover_threshold": trial.suggest_float("crossover_threshold", 0.0, 0.01),
+            "volatility_threshold": trial.suggest_float("volatility_threshold", 0.0, 0.03),
+            "trend_confirmation_candles": trial.suggest_int("trend_confirmation_candles", 1, 3),
+            "volatility_period": trial.suggest_int("volatility_period", 10, 40)
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            # Even wider validation bounds
-            "short_window": (3, 100, 'int'),
-            "long_window": (10, 200, 'int'),
-            "volatility_threshold": (0.0, 0.10, 'float'),  # Much wider for different markets
+            "short_window": (3, 50, 'int'),
+            "long_window": (10, 100, 'int'),
+            "volatility_threshold": (0.0, 0.10, 'float'),
             "crossover_threshold": (0.0, 0.05, 'float'),
-            "trend_confirmation_candles": (1, 10, 'int')
+            "trend_confirmation_candles": (1, 10, 'int'),
+            "volatility_period": (5, 60, 'int')
         }
         
     @classmethod
     def _validate_logical_consistency(cls, params):
         if params['short_window'] >= params['long_window']:
             raise ValueError("Short window must be < Long window")
+        if 'volatility_period' in params and params['volatility_period'] < 5:
+            raise ValueError("Volatility period must be >= 5")
 
     def min_data_required(self) -> int:
-        return max(self.params['long_window'], self.params['short_window']) + 20
+        # Need enough data for both MAs and volatility calculation
+        vol_period = self.params.get('volatility_period', self.params['long_window'])
+        return max(self.params['long_window'], vol_period) + 20
 
 class Momentum_Enhanced(Strategy):
     @classmethod
@@ -353,75 +457,134 @@ class Momentum_Enhanced(Strategy):
         df = data.copy()
         
         period = self.params['period']
-        if len(df) < period + 1:
+        threshold = self.params['threshold']
+        confirmation = self.params.get('confirmation_period', 1)
+        
+        # FIX 1: Calculate volatility unconditionally to avoid UnboundLocalError
+        vol = self._calculate_volatility(df['close'], min(period, 20)).iloc[-1] if len(df) > 20 else 0.0
+        
+        # Check if we have enough data
+        required_candles = max(period + 1, confirmation)
+        if len(df) < required_candles:
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
             
-        # Calculate momentum
-        if len(df) < period + 1:
+        # FIX 2: Correct momentum calculation (compare current with price period candles ago)
+        # Original: prev = df['close'].iloc[-period]  # WRONG: This is period-1 candles ago
+        # Correct: Use -(period + 1) to get the price period candles ago
+        price_periods_ago = df['close'].iloc[-(period + 1)]
+        current_price = df['close'].iloc[-1]
+        
+        if price_periods_ago == 0: 
             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
-        prev = df['close'].iloc[-period]  # FIX: period candles ago, not period+1
-        curr = df['close'].iloc[-1]
-
-        if prev == 0: 
-            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
+        # Calculate primary momentum (over the full period)
+        momentum = (current_price / price_periods_ago) - 1
         
-        momentum = (curr / prev) - 1
-
-        threshold = self.params['threshold']
-        
-        # Volatility filter
+        # FIX 3: Volatility filter (now vol is always defined)
         min_vol = self.params.get('min_volatility', 0.0)
         if min_vol > 0:
-            vol = self._calculate_volatility(df['close'], period).iloc[-1]
             if np.isnan(vol) or vol < min_vol:
                 return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
         
-        # Confirmation period
-        confirmation = self.params.get('confirmation_period', 1)
-        if confirmation > 1:
-            # Check if momentum is consistent for last N periods
-            recent_momenta = []
-            for i in range(1, confirmation + 1):
-                if len(df) >= period + i:
-                    prev_i = df['close'].iloc[-(period+i)]
-                    curr_i = df['close'].iloc[-i]
-                    if prev_i > 0:
-                        recent_momenta.append((curr_i / prev_i) - 1)
-            
-            if len(recent_momenta) == confirmation:
-                all_positive = all(m > threshold for m in recent_momenta)
-                all_negative = all(m < -threshold for m in recent_momenta)
-                
-                if all_positive:
-                    return Signal(
-                        symbol=symbol, 
-                        signal_type=SignalType.BUY, 
-                        strategy_name=self.name, 
-                        metadata={'volatility': float(vol) if min_vol > 0 else 0.02}
-                    )
-                elif all_negative:
-                    return Signal(
-                        symbol=symbol, 
-                        signal_type=SignalType.SELL, 
-                        strategy_name=self.name, 
-                        metadata={'volatility': float(vol) if min_vol > 0 else 0.02}
-                    )
-        else:
-            # Single period check
-            if momentum > threshold:
+        # FIX 4: Completely rewrite the confirmation logic
+        
+        # Basic signal check (without confirmation)
+        basic_buy_signal = momentum > threshold
+        basic_sell_signal = momentum < -threshold
+        
+        # If no confirmation needed, use basic signals
+        if confirmation == 1:
+            if basic_buy_signal:
                 return Signal(
                     symbol=symbol, 
                     signal_type=SignalType.BUY, 
                     strategy_name=self.name, 
-                    metadata={'volatility': float(vol) if min_vol > 0 else 0.02}
+                    metadata={'volatility': float(vol), 'momentum': float(momentum)}
                 )
-            elif momentum < -threshold:
+            elif basic_sell_signal:
                 return Signal(
                     symbol=symbol, 
                     signal_type=SignalType.SELL, 
                     strategy_name=self.name, 
-                    metadata={'volatility': float(vol) if min_vol > 0 else 0.02}
+                    metadata={'volatility': float(vol), 'momentum': float(momentum)}
+                )
+            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
+        
+        # Enhanced confirmation logic for multiple candles
+        # We check if the price has moved consistently in the signal direction
+        
+        if basic_buy_signal:
+            # For BUY confirmation: Check if recent price action confirms the uptrend
+            # We'll check if the close prices have been trending up
+            recent_closes = df['close'].iloc[-confirmation:].values
+            recent_highs = df['high'].iloc[-confirmation:].values
+            recent_lows = df['low'].iloc[-confirmation:].values
+            
+            # Multiple confirmation methods (choose one or combine)
+            
+            # Method 1: Simple trend - each subsequent close is higher than the previous
+            closes_increasing = all(recent_closes[i] > recent_closes[i-1] 
+                                   for i in range(1, len(recent_closes)))
+            
+            # Method 2: Higher highs and higher lows
+            highs_increasing = all(recent_highs[i] > recent_highs[i-1] 
+                                  for i in range(1, len(recent_highs)))
+            lows_increasing = all(recent_lows[i] > recent_lows[i-1] 
+                                 for i in range(1, len(recent_lows)))
+            
+            # Method 3: Overall upward movement
+            price_change_pct = (recent_closes[-1] - recent_closes[0]) / recent_closes[0]
+            overall_upward = price_change_pct > (threshold / 2)  # Half the momentum threshold
+            
+            # Use a combination of methods for robust confirmation
+            # At least 2 out of 3 confirmation methods should be true
+            confirmation_score = sum([closes_increasing, highs_increasing, overall_upward])
+            
+            if confirmation_score >= 2:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.BUY, 
+                    strategy_name=self.name, 
+                    metadata={
+                        'volatility': float(vol), 
+                        'momentum': float(momentum),
+                        'confirmation_score': confirmation_score
+                    }
+                )
+        
+        elif basic_sell_signal:
+            # For SELL confirmation: Check if recent price action confirms the downtrend
+            recent_closes = df['close'].iloc[-confirmation:].values
+            recent_highs = df['high'].iloc[-confirmation:].values
+            recent_lows = df['low'].iloc[-confirmation:].values
+            
+            # Method 1: Simple trend - each subsequent close is lower than the previous
+            closes_decreasing = all(recent_closes[i] < recent_closes[i-1] 
+                                   for i in range(1, len(recent_closes)))
+            
+            # Method 2: Lower highs and lower lows
+            highs_decreasing = all(recent_highs[i] < recent_highs[i-1] 
+                                  for i in range(1, len(recent_highs)))
+            lows_decreasing = all(recent_lows[i] < recent_lows[i-1] 
+                                 for i in range(1, len(recent_lows)))
+            
+            # Method 3: Overall downward movement
+            price_change_pct = (recent_closes[-1] - recent_closes[0]) / recent_closes[0]
+            overall_downward = price_change_pct < -(threshold / 2)
+            
+            # Use a combination of methods for robust confirmation
+            confirmation_score = sum([closes_decreasing, highs_decreasing, overall_downward])
+            
+            if confirmation_score >= 2:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.SELL, 
+                    strategy_name=self.name, 
+                    metadata={
+                        'volatility': float(vol), 
+                        'momentum': float(momentum),
+                        'confirmation_score': confirmation_score
+                    }
                 )
             
         return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
@@ -429,29 +592,33 @@ class Momentum_Enhanced(Strategy):
     @staticmethod
     def get_optuna_params(trial):
         return {
-            # Wider exploration ranges
-            "period": trial.suggest_int("period", 5, 40),  # Wider
-            "threshold": trial.suggest_float("threshold", 0.005, 0.10),  # Wider: 0.5% to 10%
-            "min_volatility": trial.suggest_float("min_volatility", 0.0, 0.04),  # Wider
-            "confirmation_period": trial.suggest_int("confirmation_period", 1, 5)  # Wider
+            # Slightly wider but reasonable ranges
+            "period": trial.suggest_int("period", 5, 30),  # Reduced max from 40 to 30
+            "threshold": trial.suggest_float("threshold", 0.01, 0.08),  # 1% to 8%
+            "min_volatility": trial.suggest_float("min_volatility", 0.0, 0.03),  # Reduced max
+            "confirmation_period": trial.suggest_int("confirmation_period", 1, 3)  # Reduced max
         }
     
     @staticmethod
     def get_param_bounds():
         return {
-            # Very wide validation bounds for different market conditions
-            "period": (3, 60, 'int'),
-            "threshold": (0.002, 0.20, 'float'),  # 0.2% to 20% momentum
-            "min_volatility": (0.0, 0.08, 'float'),
-            "confirmation_period": (1, 10, 'int')
+            # Reasonable bounds for momentum strategy
+            "period": (3, 40, 'int'),
+            "threshold": (0.005, 0.15, 'float'),  # 0.5% to 15% momentum
+            "min_volatility": (0.0, 0.05, 'float'),
+            "confirmation_period": (1, 5, 'int')
         }
     
     def min_data_required(self) -> int:
-        return max(self.params['period'], self.params.get('confirmation_period', 1)) + 20
+        period = self.params['period']
+        confirmation = self.params.get('confirmation_period', 1)
+        # Need period + 1 for the momentum calculation, plus confirmation for trend check
+        return max(period + 1, confirmation) + 20
 
 class MeanReversion_Pro(Strategy):
     """
     Advanced Mean Reversion: Bollinger Bands + RSI Confirmation.
+    CORRECTED VERSION: Proper threshold application
     """
     @classmethod
     def get_safe_defaults(cls):
@@ -460,8 +627,8 @@ class MeanReversion_Pro(Strategy):
             "rsi_period": 14, 
             "rsi_oversold": 30, 
             "rsi_overbought": 70, 
-            "buy_threshold": 0.98, 
-            "sell_threshold": 1.02,
+            "band_touch_pct": 1.0,  # 100% of band (touches band)
+            "confirmation_candles": 1,
             "min_volatility_filter": 0.01,
             "std_dev": 2.0
         }
@@ -490,60 +657,87 @@ class MeanReversion_Pro(Strategy):
         vol = self._calculate_volatility(df['close'], period).iloc[-1]
         min_vol = self.params.get('min_volatility_filter', 0.0)
         if np.isnan(vol) or (min_vol > 0 and vol < min_vol):
-             return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
+            return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
 
-        # 2. Logic (Confluence)
-        # Buy: Price drops below Lower Band AND RSI is Oversold
-        buy_threshold = self.params.get('buy_threshold', 0.98)
-        # FIX: Price should be below lower band, and buy_threshold < 1 makes it even stricter
-        # For buy_threshold=0.98, price must be below 98% of lower band (more oversold)
-        if current_price < current_lower * buy_threshold and current_rsi < self.params['rsi_oversold']:
-            return Signal(
-                symbol=symbol, 
-                signal_type=SignalType.BUY, 
-                strategy_name=self.name, 
-                metadata={'volatility': float(vol)}
-            )
-             
-        # Sell: Price spikes above Upper Band AND RSI is Overbought
-        sell_threshold = self.params.get('sell_threshold', 1.02)
-        # FIX: sell_threshold > 1 means price must be above 102% of upper band (more overbought)
-        if current_price > current_upper * sell_threshold and current_rsi > self.params['rsi_overbought']:
-             return Signal(
-                 symbol=symbol, 
-                 signal_type=SignalType.SELL, 
-                 strategy_name=self.name, 
-                 metadata={'volatility': float(vol)}
-             )
+        # 2. CORRECTED LOGIC (Confluence)
+        band_touch_pct = self.params.get('band_touch_pct', 1.0)
+        confirmation = self.params.get('confirmation_candles', 1)
+        
+        # Check if price has touched or crossed the band
+        if confirmation > 1:
+            # Multi-candle confirmation: check if price has been at/below lower band for N candles
+            recent_prices = df['close'].iloc[-confirmation:]
+            recent_lower = lower.iloc[-confirmation:]
+            recent_rsi = rsi.iloc[-confirmation:]
+            
+            price_below_band = all(p <= l * band_touch_pct for p, l in zip(recent_prices, recent_lower))
+            rsi_below_threshold = all(r <= self.params['rsi_oversold'] for r in recent_rsi)
+            
+            if price_below_band and rsi_below_threshold:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.BUY, 
+                    strategy_name=self.name, 
+                    metadata={'volatility': float(vol)}
+                )
+                
+            # Similar for sell condition
+            price_above_band = all(p >= u * band_touch_pct for p, u in zip(recent_prices, recent_upper))
+            rsi_above_threshold = all(r >= self.params['rsi_overbought'] for r in recent_rsi)
+            
+            if price_above_band and rsi_above_threshold:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.SELL, 
+                    strategy_name=self.name, 
+                    metadata={'volatility': float(vol)}
+                )
+        else:
+            # Single candle confirmation
+            # BUY: Price touches/crosses lower band AND RSI is oversold
+            if current_price <= current_lower * band_touch_pct and current_rsi <= self.params['rsi_oversold']:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.BUY, 
+                    strategy_name=self.name, 
+                    metadata={'volatility': float(vol)}
+                )
+                 
+            # SELL: Price touches/crosses upper band AND RSI is overbought
+            if current_price >= current_upper * band_touch_pct and current_rsi >= self.params['rsi_overbought']:
+                return Signal(
+                    symbol=symbol, 
+                    signal_type=SignalType.SELL, 
+                    strategy_name=self.name, 
+                    metadata={'volatility': float(vol)}
+                )
              
         return Signal(symbol=symbol, signal_type=SignalType.HOLD, strategy_name=self.name)
 
     @staticmethod
     def get_optuna_params(trial):
         return {
-            # Balanced exploration ranges
             "period": trial.suggest_int("period", 10, 60),
             "rsi_period": trial.suggest_int("rsi_period", 7, 28),
-            "rsi_oversold": trial.suggest_int("rsi_oversold", 20, 45),  # Wider
-            "rsi_overbought": trial.suggest_int("rsi_overbought", 55, 85),  # Wider
-            "std_dev": trial.suggest_float("std_dev", 1.5, 3.5),  # Wider
-            "buy_threshold": trial.suggest_float("buy_threshold", 0.92, 1.0),  # Much wider
-            "sell_threshold": trial.suggest_float("sell_threshold", 1.0, 1.08),  # Wider
-            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.04)  # Wider
+            "rsi_oversold": trial.suggest_int("rsi_oversold", 20, 45),
+            "rsi_overbought": trial.suggest_int("rsi_overbought", 55, 85),
+            "std_dev": trial.suggest_float("std_dev", 1.5, 3.5),
+            "band_touch_pct": trial.suggest_float("band_touch_pct", 0.98, 1.02),  # 98-102% of band
+            "min_volatility_filter": trial.suggest_float("min_volatility_filter", 0.0, 0.04),
+            "confirmation_candles": trial.suggest_int("confirmation_candles", 1, 3)
         }
         
     @staticmethod
     def get_param_bounds():
         return {
-            # Very wide validation bounds
             "period": (8, 100, 'int'),
             "rsi_period": (5, 35, 'int'),
             "rsi_oversold": (15, 50, 'int'),
             "rsi_overbought": (50, 90, 'int'),
             "std_dev": (1.0, 4.0, 'float'),
-            "buy_threshold": (0.85, 1.0, 'float'),  # 0-15% below lower band
-            "sell_threshold": (1.0, 1.15, 'float'),  # 0-15% above upper band
-            "min_volatility_filter": (0.0, 0.06, 'float')
+            "band_touch_pct": (0.95, 1.05, 'float'),  # 95-105% of band for flexibility
+            "min_volatility_filter": (0.0, 0.06, 'float'),
+            "confirmation_candles": (1, 5, 'int')
         }
 
     def min_data_required(self) -> int:
