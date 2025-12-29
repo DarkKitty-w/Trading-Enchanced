@@ -24,10 +24,14 @@ Handles core logic for signal processing, trade execution, risk management, and 
 *   Uses a global, unseeded `np.random.normal`, making backtests non-reproducible.
 *   Calculates total equity using only the price of the current signal's asset, ignoring other open positions.
 *   Instance is stateful (`daily_pnl`, `consecutive_losses`), making it non-reentrant and unsafe for concurrency.
-*   Silently falls back to hardcoded defaults when risk configuration is missing.
+*   Silently falls back to hardcoded defaults for missing risk configuration.
 *   Uses a hardcoded, inaccurate volatility value when simulating stop-loss executions.
-*   Contains confusing variable naming (`amount_usd` vs `max_total_cost`).
-*   Contains brittle string parsing (`symbol.split('/')`).
+*   (from audit) Assumes naive datetimes from DB are UTC, risking time-series errors.
+*   (from audit) Daily state reset is fragile and tied to signal timestamps.
+*   (from audit) Redundant calculation of position size in validation and execution steps.
+*   (from audit) Market impact simulation is incomplete (hardcoded `size_multiplier`).
+*   (from audit) Confusing variable naming (`amount_usd` vs. `max_total_cost`).
+*   (from audit) Brittle string parsing for symbols (`.split('/')`).
 
 ---
 
@@ -49,7 +53,13 @@ Handles core logic for signal processing, trade execution, risk management, and 
 *   [ ] Remove instance variables: `self.consecutive_losses`, `self.daily_pnl`, `self.last_trade_date`.
 *   [ ] In methods that used instance state, replace with calls to `self.db.get_strategy_state()` and `self.db.update_strategy_state()`.
 *   [ ] In `check_stop_losses`, fetch the current volatility for the symbol and pass it to `_execute_sell` instead of the hardcoded `0.02`.
-*   [ ] In `_get_strategy_risk_setting`, remove the `default` parameter and raise a `ConfigurationError` if a setting is not found.
+*   [ ] (from audit) In `_get_strategy_risk_setting`, remove the `default` parameter and raise a `ConfigurationError` if a setting is not found.
+*   [ ] (from audit) Add validation to ensure all datetimes retrieved from the database are timezone-aware before use.
+*   [ ] (from audit) Refactor daily state reset to be triggered by a dedicated daily event, not an incoming signal timestamp.
+*   [ ] (from audit) Pass the calculated position size from `_validate_risk` to `_execute_buy` to avoid recalculation.
+*   [ ] (from audit) Move hardcoded `size_multiplier` from `get_realistic_price` to `config.json`.
+*   [ ] (from audit) Refactor confusing variable names (e.g., `amount_usd` to `target_notional_value`) for clarity.
+*   [ ] (from audit) Replace brittle `.split('/')` logic with a more robust symbol parsing utility.
 
 ---
 
@@ -65,6 +75,7 @@ Handles core logic for signal processing, trade execution, risk management, and 
 *   **Test Equity Valuation**: Verify `_calculate_total_equity` uses market prices for all open positions.
 *   **Test Exposure Validation**: Verify `_validate_risk` uses market prices and rejects trades correctly.
 *   **Test Stop-Loss Accuracy**: Verify `check_stop_losses` passes a non-hardcoded volatility to its execution call.
+*   (from audit) **Test Timezone Enforcement**: Verify the system raises an error if it encounters a naive datetime from the database.
 
 ---
 
@@ -80,7 +91,8 @@ Provides a database interface for persisting and retrieving application data.
 
 *   Lacks any support for atomic transactions, enabling state corruption.
 *   Database schema is missing a table to store per-strategy state (`daily_pnl`, etc.).
-*   Designed as a singleton without connection pooling, which can become a bottleneck.
+*   (from audit) Singleton design without connection pooling, a potential future bottleneck.
+*   (from audit) Inconsistent error handling across different methods.
 
 ---
 
@@ -92,6 +104,8 @@ Provides a database interface for persisting and retrieving application data.
 *   [ ] Add a new table `strategy_states` to `database_schema.sql`.
 *   [ ] Add `get_strategy_state(strategy_id)` method to fetch data from the new table.
 *   [ ] Add `update_strategy_state(strategy_id, state_data)` method to update the new table.
+*   [ ] (from audit) Review and normalize exception handling to be consistent across all data access methods.
+*   [ ] (from audit) Investigate replacing the singleton pattern with a connection-pooled approach for future scalability.
 
 ---
 
@@ -121,7 +135,7 @@ Serve as the primary entry points and orchestrators for live trading and backtes
 
 *   They call `ExecutionManager` using an old API that will break after refactoring.
 *   They lack the logic to fetch market prices for all open positions before processing a signal.
-*   They instantiate dependencies separately, without a centralized container.
+*   (from audit) They instantiate dependencies separately, without a centralized container, leading to boilerplate.
 
 ---
 
@@ -132,6 +146,7 @@ Serve as the primary entry points and orchestrators for live trading and backtes
     *   [ ] Get a list of all symbols for open positions from the database.
     *   [ ] Call `market_data` to fetch current prices for those symbols, creating a `market_prices` dictionary.
 *   [ ] Update the call to `execution_manager.process_signal` to pass the `market_prices` dict and the `rng` instance.
+*   [ ] (from audit) Review non-centralized dependency instantiation for potential refactoring into a shared factory function.
 
 ---
 
@@ -148,10 +163,69 @@ Serve as the primary entry points and orchestrators for live trading and backtes
 
 ---
 
+## 📄 `optimize.py`
+
+### 🧩 File Role
+
+Runs hyperparameter optimization studies.
+
+---
+
+### ❌ Identified Problems
+
+*   (from audit) Not updated to handle new deterministic RNG requirements, making optimization results invalid and non-reproducible.
+
+---
+
+### 🔧 TODO — Required Fixes & Changes
+
+*   [ ] (from audit) Update `optimize.py` to create and pass a correctly seeded `np.random.Generator` instance to the `ExecutionManager` for each trial.
+
+---
+
+### 🔁 Dependency Notes
+
+*   Dependent on API changes in `core/execution.py`.
+
+---
+
+### 🧪 Required Tests
+
+*   **Test Optimization Determinism**: Verify that a single optimization trial can be re-run with the same seed and produce the same result.
+
+---
+
+## 📄 `dashboard.py` and `analytics.py`
+
+### 🧩 File Role
+
+Provide data visualization and analysis of trading results.
+
+---
+
+### ❌ Identified Problems
+
+*   (from audit) May be broken by database schema changes (e.g., new `strategy_states` table) and may rely on data that is now known to be incorrect.
+
+---
+
+### 🔧 TODO — Required Fixes & Changes
+
+*   [ ] (from audit) Review all database queries in `dashboard.py` and `analytics.py` to ensure they are compatible with the updated database schema.
+*   [ ] (from audit) Validate that visualizations correctly represent the new, correct data structures.
+
+---
+
+### 🔁 Dependency Notes
+
+*   Dependent on schema changes in `core/database.py`.
+
+---
+
 ## 🔗 Cross-File TODOs
 
 *   [ ] **Propagate Market Prices**: Ensure the `market_prices: Dict[str, float]` dictionary is created in the main loop and passed through `process_signal` to all valuation functions.
-*   [ ] **Enforce Deterministic RNG**: Ensure the seeded `np.random.Generator` is created in the entry points (`main.py`, `backtest.py`) and passed to `ExecutionManager` and all simulation functions.
+*   [ ] **Enforce Deterministic RNG**: Ensure the seeded `np.random.Generator` is created in the entry points (`main.py`, `backtest.py`, `optimize.py`) and passed to `ExecutionManager` and all simulation functions.
 *   [ ] **Externalize State**: Complete the removal of state variables from `ExecutionManager` and ensure state is read from and written to `core/database.py` on each transaction.
 *   [ ] **Enforce Strict Configuration**: Audit all calls to `_get_strategy_risk_setting` and ensure they are wrapped in error handling for the newly possible `ConfigurationError`.
 
