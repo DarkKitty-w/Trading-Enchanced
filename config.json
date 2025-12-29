@@ -18,16 +18,15 @@
     "trading": {
         "stake_amount": 100.0,
         "pairs": [
-            "BTC/USD",
-            "ETH/USD",
-            "SOL/USD",
-            "BNB/USD",
-            "XRP/USD",
-            "ADA/USD",
-            "DOGE/USD",
-            "LTC/USD"
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "BNB/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "DOGE/USDT"
         ],
-        "quote_currency": "USD",
+        "quote_currency": "USDT",
         "timeframe": "15m",
         "max_open_positions": 5,
         "blacklist_coins": [
@@ -78,37 +77,33 @@
         "min_notional_usd": 10.0,
         "max_slippage_pct": 0.02,
         "precision": {
-            "BTC/USD": {
+            "BTC/USDT": {
                 "price_precision": 2,
                 "quantity_precision": 5
             },
-            "ETH/USD": {
+            "ETH/USDT": {
                 "price_precision": 2,
                 "quantity_precision": 4
             },
-            "SOL/USD": {
+            "SOL/USDT": {
                 "price_precision": 2,
                 "quantity_precision": 2
             },
-            "BNB/USD": {
+            "BNB/USDT": {
                 "price_precision": 1,
                 "quantity_precision": 3
             },
-            "XRP/USD": {
+            "XRP/USDT": {
                 "price_precision": 4,
                 "quantity_precision": 1
             },
-            "ADA/USD": {
+            "ADA/USDT": {
                 "price_precision": 4,
                 "quantity_precision": 1
             },
-            "DOGE/USD": {
+            "DOGE/USDT": {
                 "price_precision": 5,
                 "quantity_precision": 0
-            },
-            "LTC/USD": {
-                "price_precision": 2,
-                "quantity_precision": 4
             }
         },
         "order_types": [
@@ -135,18 +130,18 @@
                 "min_volatility_filter": 0.0037050564118808666
             },
             "MA_Enhanced": {
-                "short_window": 22,
-                "long_window": 96,
-                "volatility_threshold": 0.023946339367881465,
-                "crossover_threshold": 0.007319939418114051,
-                "volatility_period": 20,
-                "trend_confirmation_candles": 1
+                "short_window": 23,
+                "long_window": 24,
+                "volatility_threshold": 0.0005318446030945748,
+                "crossover_threshold": 0.0005101922293434947,
+                "volatility_period": 40,
+                "trend_confirmation_candles": 3
             },
             "Momentum_Enhanced": {
-                "period": 18,
-                "threshold": 0.09531785910894204,
-                "min_volatility": 0.029279757672456205,
-                "confirmation_period": 3
+                "period": 27,
+                "threshold": 0.01089228139263818,
+                "min_volatility": 0.0043083309371018865,
+                "confirmation_period": 2
             },
             "MeanReversion_Pro": {
                 "period": 29,
@@ -156,7 +151,9 @@
                 "band_touch_pct": 1.0,
                 "confirmation_candles": 1,
                 "min_volatility_filter": 0.03464704583099741,
-                "std_dev": 1.812037280884873
+                "std_dev": 1.812037280884873,
+                "buy_threshold": 0.9324795616268963,
+                "sell_threshold": 1.004646688973456
             },
             "MA_Momentum_Hybrid": {
                 "short_window": 22,
@@ -190,31 +187,32 @@
             },
             "MA_Enhanced": {
                 "parameters": {
-                    "short_window": 22,
-                    "long_window": 96,
-                    "crossover_threshold": 0.007319939418114051,
-                    "volatility_threshold": 0.023946339367881465,
-                    "trend_confirmation_candles": 1
+                    "short_window": 23,
+                    "long_window": 24,
+                    "crossover_threshold": 0.0005101922293434947,
+                    "volatility_threshold": 0.0005318446030945748,
+                    "trend_confirmation_candles": 3,
+                    "volatility_period": 40
                 },
-                "score": -999.0,
-                "optimized_at": "2025-12-28T14:08:40.315331",
+                "score": 61.49086748248182,
+                "optimized_at": "2025-12-29T15:40:25.290628",
                 "score_components": {
-                    "total": -999.0,
-                    "rating": "POOR"
+                    "total": 61.49086748248182,
+                    "rating": "GOOD"
                 }
             },
             "Momentum_Enhanced": {
                 "parameters": {
-                    "period": 18,
-                    "threshold": 0.09531785910894204,
-                    "min_volatility": 0.029279757672456205,
-                    "confirmation_period": 3
+                    "period": 27,
+                    "threshold": 0.01089228139263818,
+                    "min_volatility": 0.0043083309371018865,
+                    "confirmation_period": 2
                 },
-                "score": -999.0,
-                "optimized_at": "2025-12-28T14:38:28.598474",
+                "score": 74.35339664247111,
+                "optimized_at": "2025-12-29T15:49:00.705766",
                 "score_components": {
-                    "total": -999.0,
-                    "rating": "POOR"
+                    "total": 74.35339664247111,
+                    "rating": "GOOD"
                 }
             },
             "MeanReversion_Pro": {
@@ -224,12 +222,12 @@
                     "rsi_oversold": 39,
                     "rsi_overbought": 73,
                     "std_dev": 1.812037280884873,
-                    "band_touch_pct": 1.0,
-                    "confirmation_candles": 1,
+                    "buy_threshold": 0.9324795616268963,
+                    "sell_threshold": 1.004646688973456,
                     "min_volatility_filter": 0.03464704583099741
                 },
                 "score": -999.0,
-                "optimized_at": "2025-12-28T10:45:05.742090",
+                "optimized_at": "2025-12-28T15:09:42.426096",
                 "score_components": {
                     "total": -999.0,
                     "rating": "POOR"
@@ -302,11 +300,10 @@
         "enable_export": true
     },
     "data": {
-        "source": "coingecko",
+        "source": "kucoin",
         "cache_ttl_minutes": 5,
         "max_historical_days": 365,
         "update_interval_minutes": 5,
         "save_to_database": true
     }
-
 }

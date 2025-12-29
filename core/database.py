@@ -84,7 +84,7 @@ class Database:
             .eq("strategy_id", strategy_id)\
             .execute()
         
-        if res.data:
+        if res.data and res.data[0]['available_cash'] is not None:
             return float(res.data[0]['available_cash'])
         return 0.0
 
@@ -105,8 +105,11 @@ class Database:
     # 3. TRADE LOGGING
     # ------------------------------------------------------------------
 
-    def log_trade(self, strategy_id: str, symbol: str, side: str, price: float, quantity: float, fees: float = 0.0):
+    def log_trade(self, strategy_id: str, symbol: str, side: str, price: float, quantity: float, fees: float = 0.0, timestamp: datetime = None):
         """Logs a paper trade execution."""
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+            
         payload = {
             "strategy_id": strategy_id,
             "symbol": symbol,
@@ -114,9 +117,13 @@ class Database:
             "price": price,
             "quantity": quantity,
             "fees": fees,
-            "executed_at": datetime.utcnow().isoformat()
+            "executed_at": timestamp.isoformat()
         }
-        self.client.table("trades").insert(payload).execute()
+        
+        result = self.client.table("trades").insert(payload).execute()
+        if result.data:
+            return result.data[0]['id']
+        return None
 
     def get_strategy_trades(self, strategy_id: str) -> List[Dict]:
         """Fetch trade history strictly for this strategy."""
@@ -131,8 +138,11 @@ class Database:
     # 4. POSITION MANAGEMENT
     # ------------------------------------------------------------------
 
-    def open_position(self, strategy_id: str, symbol: str, side: str, quantity: float, entry_price: float):
+    def open_position(self, strategy_id: str, symbol: str, side: str, quantity: float, entry_price: float, timestamp: datetime = None):
         """Creates a new OPEN position record."""
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+            
         payload = {
             "strategy_id": strategy_id,
             "symbol": symbol,
@@ -140,40 +150,64 @@ class Database:
             "quantity": quantity,
             "entry_price": entry_price,
             "status": "OPEN",
-            "opened_at": datetime.utcnow().isoformat()
+            "opened_at": timestamp.isoformat()
         }
-        self.client.table("positions").insert(payload).execute()
+        
+        result = self.client.table("positions").insert(payload).execute()
+        if result.data:
+            return result.data[0]['id']
+        return None
 
-    def close_position(self, strategy_id: str, symbol: str, exit_price: float):
+    def close_position(self, position_id: str, exit_price: float, timestamp: datetime = None):
         """
-        Marks OPEN positions for this strategy/symbol as CLOSED.
+        Marks a specific position as CLOSED.
         Returns the closed position for PnL calculation.
         """
-        # Find open positions for this specific strategy & symbol
-        open_positions = self.client.table("positions")\
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+            
+        # First get the position to calculate PnL
+        position_res = self.client.table("positions")\
             .select("*")\
-            .eq("strategy_id", strategy_id)\
-            .eq("symbol", symbol)\
-            .eq("status", "OPEN")\
+            .eq("id", position_id)\
             .execute()
-
-        if not open_positions.data:
-            print(f"⚠️ No open position found to close for {symbol} (Strategy ID: {strategy_id})")
-            return None
-
-        # Update them to CLOSED
-        ids_to_close = [p['id'] for p in open_positions.data]
         
+        if not position_res.data:
+            print(f"⚠️ Position {position_id} not found")
+            return None
+            
+        position = position_res.data[0]
+        
+        # Calculate realized PnL
+        entry_price = position.get('entry_price')
+        quantity = position.get('quantity')
+        side = position.get('side')
+        
+        if entry_price is None or quantity is None:
+            print(f"⚠️ Position {position_id} has null entry_price or quantity")
+            realized_pnl = 0.0
+        else:
+            entry_price = float(entry_price)
+            quantity = float(quantity)
+            
+            if side == "LONG":
+                realized_pnl = (exit_price - entry_price) * quantity
+            else:  # SHORT
+                realized_pnl = (entry_price - exit_price) * quantity
+        
+        # Update the position
         self.client.table("positions")\
             .update({
                 "status": "CLOSED", 
                 "exit_price": exit_price,
-                "closed_at": datetime.utcnow().isoformat()
+                "realized_pnl": realized_pnl,
+                "closed_at": timestamp.isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
             })\
-            .in_("id", ids_to_close)\
+            .eq("id", position_id)\
             .execute()
         
-        return open_positions.data[0]  # Return first closed position
+        return position
 
     def get_strategy_positions(self, strategy_id: str, status: str = "OPEN") -> List[Dict]:
         """Fetch positions filtered by strategy and status."""
@@ -182,7 +216,20 @@ class Database:
             .eq("strategy_id", strategy_id)\
             .eq("status", status)\
             .execute()
-        return res.data
+        
+        # Ensure all numeric fields are floats, not None
+        positions = []
+        for pos in res.data:
+            # Convert numeric fields, handling None values
+            if pos.get('quantity') is not None:
+                pos['quantity'] = float(pos['quantity'])
+            if pos.get('entry_price') is not None:
+                pos['entry_price'] = float(pos['entry_price'])
+            if pos.get('exit_price') is not None:
+                pos['exit_price'] = float(pos['exit_price'])
+            positions.append(pos)
+        
+        return positions
 
     # ------------------------------------------------------------------
     # 5. PERFORMANCE METRICS & HEARTBEAT
@@ -192,24 +239,61 @@ class Database:
         """
         Logs a snapshot of performance metrics.
         """
+        # Map 'pnl_percentage' to 'total_return_pct' (column name in database)
+        if 'pnl_percentage' in metrics:
+            metrics['total_return_pct'] = metrics.pop('pnl_percentage')
+        
         # Filter metrics to ensure we only send what the DB expects
         valid_keys = {"total_pnl", "sharpe_ratio", "max_drawdown", "win_rate", 
                      "trades_count", "unrealized_pnl", "asset", "price", 
-                     "return_pct", "timestamp", "win"}
-        payload = {k: v for k, v in metrics.items() if k in valid_keys}
+                     "total_return_pct", "win", "entry_price", "exit_price", 
+                     "holding_period", "calculated_at"}
         
+        payload = {k: v for k, v in metrics.items() if k in valid_keys}
         payload["strategy_id"] = strategy_id
         
-        # Use provided timestamp or current time
-        if "timestamp" not in payload:
-            payload["calculated_at"] = datetime.utcnow().isoformat()
-        else:
-            payload["calculated_at"] = payload.pop("timestamp")
+        # Convert holding_period to days if present
+        if "holding_period" in payload and payload["holding_period"] is not None:
+            # Ensure holding_period is a float representing days
+            if not isinstance(payload["holding_period"], (int, float)):
+                try:
+                    payload["holding_period"] = float(payload["holding_period"])
+                except (ValueError, TypeError):
+                    payload["holding_period"] = 0.0
         
-        self.client.table("performance_metrics").insert(payload).execute()
+        # Use current time for calculation if not provided
+        if "calculated_at" not in payload:
+            payload["calculated_at"] = datetime.utcnow().isoformat()
+        
+        try:
+            self.client.table("performance_metrics").insert(payload).execute()
+        except Exception as e:
+            print(f"⚠️ Error logging performance for strategy {strategy_id}: {e}")
 
     # ------------------------------------------------------------------
-    # 6. PORTFOLIO HISTORY (for backtesting and analytics)
+    # 6. SYSTEM LOGS (replaces execution_metadata)
+    # ------------------------------------------------------------------
+
+    def log_system_event(self, level: str, module: str, message: str, details: Dict[str, Any] = None):
+        """
+        Logs system events to the system_logs table.
+        Use this instead of the non-existent execution_metadata table.
+        """
+        payload = {
+            "level": level.upper(),  # INFO, WARNING, ERROR, DEBUG
+            "module": module,  # e.g., "execution", "strategy", "market_data"
+            "message": message,
+            "details": details or {},
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        try:
+            self.client.table("system_logs").insert(payload).execute()
+        except Exception as e:
+            print(f"⚠️ Error logging system event: {e}")
+
+    # ------------------------------------------------------------------
+    # 7. PORTFOLIO HISTORY (for backtesting and analytics)
     # ------------------------------------------------------------------
 
     def log_portfolio_history(self, strategy_id: str, timestamp: datetime, equity: float, 
@@ -238,7 +322,7 @@ class Database:
         return res.data
 
     # ------------------------------------------------------------------
-    # 7. MARKET DATA CACHE
+    # 8. MARKET DATA CACHE
     # ------------------------------------------------------------------
 
     def cache_market_data(self, symbol: str, timeframe: str, data: Dict, ttl_minutes: int = 5):
@@ -283,7 +367,7 @@ class Database:
         return None
 
     # ------------------------------------------------------------------
-    # 8. STRATEGY PARAMETERS (for optimization)
+    # 9. STRATEGY PARAMETERS (for optimization)
     # ------------------------------------------------------------------
 
     def save_strategy_parameters(self, strategy_id: str, parameters: Dict[str, Any], 
@@ -315,7 +399,46 @@ class Database:
         return None
 
     # ------------------------------------------------------------------
-    # 9. TRANSACTION SUPPORT
+    # 10. STRATEGY STATS
+    # ------------------------------------------------------------------
+
+    def get_strategy_stats(self, strategy_id: str) -> Dict[str, Any]:
+        """Get basic statistics for a strategy."""
+        stats = {
+            'total_trades': 0,
+            'winning_trades': 0,
+            'total_pnl': 0.0,
+            'open_positions': 0
+        }
+        
+        try:
+            # Get trade count
+            trades = self.get_strategy_trades(strategy_id)
+            stats['total_trades'] = len(trades)
+            
+            # Get open positions count
+            open_positions = self.get_strategy_positions(strategy_id, status="OPEN")
+            stats['open_positions'] = len(open_positions)
+            
+            # Get performance metrics (most recent)
+            perf_res = self.client.table("performance_metrics")\
+                .select("*")\
+                .eq("strategy_id", strategy_id)\
+                .order("calculated_at", desc=True)\
+                .limit(1)\
+                .execute()
+                
+            if perf_res.data:
+                stats['total_pnl'] = perf_res.data[0].get('total_pnl', 0.0)
+                stats['winning_trades'] = perf_res.data[0].get('winning_trades', 0)
+                
+        except Exception as e:
+            print(f"⚠️ Error getting strategy stats: {e}")
+            
+        return stats
+
+    # ------------------------------------------------------------------
+    # 11. TRANSACTION SUPPORT
     # ------------------------------------------------------------------
 
     def execute_transaction(self, operations: List[Dict]):

@@ -175,12 +175,13 @@ class PhoenixBot:
         3. Execute Signals (Risk & Order Mgmt)
         4. Log Heartbeat
         """
+        timeframe = self.config['trading'].get('timeframe', '1m')
         # --- 1. Batch Data Fetching with Caching ---
-        market_snapshot = {}
-        for pair in self.trading_pairs:
-            df = await self._get_cached_market_data(pair)
-            if df is not None and not df.empty:
-                market_snapshot[pair] = df
+        market_snapshot = await self.market_data.fetch_latest_candles(
+            pairs=self.trading_pairs,
+            timeframe=timeframe,
+            limit=500  # Ensure enough data for strategy indicators
+        )
 
         if not market_snapshot:
             logger.warning("⚠️ No market data received this cycle.")
@@ -275,7 +276,7 @@ class PhoenixBot:
                 "unrealized_pnl": unrealized_pnl,
                 "asset": position['symbol'],
                 "price": current_price,
-                "return_pct": return_pct,
+                "total_return_pct": return_pct,
                 "timestamp": current_time.isoformat()
             })
             

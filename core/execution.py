@@ -2,7 +2,7 @@ import logging
 import asyncio
 import numpy as np
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 # Project imports
@@ -90,8 +90,9 @@ class ExecutionManager:
         if signal.signal_type == SignalType.HOLD:
             return {"status": "hold", "reason": "HOLD signal"}
         
+        # Use UTC timezone-aware datetime if no timestamp provided
         if timestamp is None:
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
         
         # Reset daily tracking if new day
         today = timestamp.date().isoformat()
@@ -111,10 +112,10 @@ class ExecutionManager:
         # Calculate dynamic volatility from signal metadata
         volatility = signal.metadata.get('volatility', 0.02)
         
-        # Risk validation with detailed feedback
+        # Risk validation with detailed feedback - FIXED: Now passing volatility parameter
         risk_check, risk_reason = await self._validate_risk(
             strategy_id, signal, available_cash, open_positions, 
-            current_price, total_equity, timestamp
+            current_price, total_equity, timestamp, volatility  # Added volatility parameter
         )
         
         if not risk_check:
@@ -147,7 +148,7 @@ class ExecutionManager:
 
     async def _validate_risk(self, strategy_id: str, signal: Signal, cash: float, 
                            positions: List[Dict], current_price: float, 
-                           total_equity: float, timestamp: datetime) -> Tuple[bool, str]:
+                           total_equity: float, timestamp: datetime, volatility: float) -> Tuple[bool, str]:  # Added volatility parameter
         """
         Validates risk management rules before execution.
         Returns: (is_valid, reason)
@@ -202,7 +203,16 @@ class ExecutionManager:
                 return False, f"Position too large (> ${self.max_notional})"
         
         # 7. Check maximum portfolio exposure
-        current_exposure = sum(float(p['quantity']) * float(p['entry_price']) for p in positions)
+        current_exposure = 0.0
+        for p in positions:
+            quantity = p.get('quantity')
+            entry_price = p.get('entry_price')
+            if quantity is not None and entry_price is not None:
+                try:
+                    current_exposure += float(quantity) * float(entry_price)
+                except (ValueError, TypeError):
+                    continue
+        
         if signal.signal_type == SignalType.BUY:
             proposed_exposure = current_exposure + self.calculate_position_size(
                 strategy_name, cash, volatility, total_equity
@@ -290,15 +300,23 @@ class ExecutionManager:
             new_cash = cash - total_cost
             self.db.update_cash(strategy_id, new_cash)
             
-            # D. Log metadata
-            self.db.log_execution_metadata(
-                strategy_id=strategy_id,
-                trade_id=trade_id,
-                position_id=position_id,
-                metadata={
+            # D. Log execution details to system_logs (replaces log_execution_metadata)
+            self.db.log_system_event(
+                level="INFO",
+                module="execution",
+                message=f"BUY execution for {signal.symbol}",
+                details={
+                    'strategy_id': strategy_id,
+                    'trade_id': trade_id,
+                    'position_id': position_id,
+                    'symbol': signal.symbol,
+                    'execution_price': exec_price,
+                    'quantity': quantity,
                     'volatility': volatility,
                     'slippage': exec_price / price - 1,
-                    'original_signal': signal.to_dict() if hasattr(signal, 'to_dict') else str(signal),
+                    'total_cost': total_cost,
+                    'fees': fees,
+                    'original_signal': str(signal),
                     'risk_percentage_used': (total_cost / total_equity) * 100 if total_equity > 0 else 0
                 }
             )
@@ -335,8 +353,15 @@ class ExecutionManager:
             return {"status": "rejected", "reason": "No open position found"}
         
         position_id = target_pos.get('id')
-        quantity = float(target_pos['quantity'])
-        entry_price = float(target_pos['entry_price'])
+        quantity = target_pos.get('quantity')
+        entry_price = target_pos.get('entry_price')
+        
+        if quantity is None or entry_price is None:
+            logger.warning(f"   ⚠️ SELL ignored: Position {position_id} has null quantity or entry_price")
+            return {"status": "rejected", "reason": "Invalid position data"}
+        
+        quantity = float(quantity)
+        entry_price = float(entry_price)
         
         # 2. Calculate Realistic Execution Price
         exec_price = self.get_realistic_price(price, "SELL", volatility)
@@ -371,14 +396,39 @@ class ExecutionManager:
                 timestamp=timestamp
             )
             
-            # B. Close the Position
+            # B. Close the Position - Fixed: now uses position_id instead of strategy_id and symbol
             self.db.close_position(position_id, exec_price, timestamp)
             
             # C. Update Cash
             new_cash = cash + net_proceeds
             self.db.update_cash(strategy_id, new_cash)
             
-            # D. Log Realized PnL and performance
+            # D. Calculate holding period with timezone awareness
+            opened_at_str = target_pos.get('opened_at')
+            holding_period = 0.0
+            
+            if opened_at_str:
+                try:
+                    # Parse the opened_at string from database
+                    opened_at = datetime.fromisoformat(opened_at_str.replace('Z', '+00:00'))
+                    
+                    # Make both datetimes timezone-aware
+                    if opened_at.tzinfo is None:
+                        opened_at = opened_at.replace(tzinfo=timezone.utc)
+                    
+                    if timestamp.tzinfo is None:
+                        timestamp_aware = timestamp.replace(tzinfo=timezone.utc)
+                    else:
+                        timestamp_aware = timestamp
+                    
+                    # Calculate holding period in days
+                    holding_period = (timestamp_aware - opened_at).total_seconds() / 86400.0
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not calculate holding period: {e}")
+                    holding_period = 0.0
+            
+            # E. Log Realized PnL and performance
             self.db.log_performance(strategy_id, {
                 "total_pnl": realized_pnl,
                 "pnl_percentage": pnl_percentage,
@@ -386,21 +436,29 @@ class ExecutionManager:
                 "win": 1 if realized_pnl > 0 else 0,
                 "entry_price": entry_price,
                 "exit_price": exec_price,
-                "holding_period": (timestamp - datetime.fromisoformat(target_pos['opened_at'])).total_seconds() / 86400
+                "holding_period": holding_period
             })
             
-            # E. Log execution metadata
-            self.db.log_execution_metadata(
-                strategy_id=strategy_id,
-                trade_id=trade_id,
-                position_id=position_id,
-                metadata={
+            # F. Log execution details to system_logs (replaces log_execution_metadata)
+            self.db.log_system_event(
+                level="INFO",
+                module="execution",
+                message=f"SELL execution for {signal.symbol}",
+                details={
+                    'strategy_id': strategy_id,
+                    'trade_id': trade_id,
+                    'position_id': position_id,
+                    'symbol': signal.symbol,
+                    'execution_price': exec_price,
+                    'quantity': quantity,
                     'volatility': volatility,
                     'slippage': 1 - exec_price / price,
                     'realized_pnl': realized_pnl,
                     'pnl_percentage': pnl_percentage,
-                    'holding_days': (timestamp - datetime.fromisoformat(target_pos['opened_at'])).total_seconds() / 86400,
-                    'original_signal': signal.to_dict() if hasattr(signal, 'to_dict') else str(signal)
+                    'net_proceeds': net_proceeds,
+                    'fees': fees,
+                    'holding_days': holding_period,
+                    'original_signal': str(signal)
                 }
             )
             
@@ -456,21 +514,37 @@ class ExecutionManager:
 
     def _calculate_total_equity(self, strategy_id: str, cash: float, 
                               positions: List[Dict], current_price: float) -> float:
-        """Calculate total equity (cash + position values)."""
+        """Calculate total equity (cash + position values) with resilience."""
         position_value = 0.0
         
         for pos in positions:
             if pos['symbol'] == 'CASH':
                 continue
             
-            # Use provided current_price for the target symbol, 
-            # for other positions we'd need their current prices
-            # This is a simplification - in reality, you'd need all current prices
-            if 'current_price' in pos:
-                position_value += float(pos['quantity']) * float(pos['current_price'])
-            else:
-                # If we don't have current price, use entry price as approximation
-                position_value += float(pos['quantity']) * float(pos['entry_price'])
+            quantity = pos.get('quantity')
+            if quantity is None:
+                continue
+            
+            try:
+                quantity = float(quantity)
+            except (ValueError, TypeError):
+                continue
+            
+            # Try to use the most accurate price available
+            if 'current_price' in pos and pos['current_price'] is not None:
+                try:
+                    position_value += quantity * float(pos['current_price'])
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            
+            # Fall back to entry price
+            entry_price = pos.get('entry_price')
+            if entry_price is not None:
+                try:
+                    position_value += quantity * float(entry_price)
+                except (ValueError, TypeError):
+                    pass
         
         return cash + position_value
 
@@ -585,8 +659,17 @@ class ExecutionManager:
                     continue
                 
                 current_price = current_prices[symbol]
-                entry_price = float(position['entry_price'])
-                quantity = float(position['quantity'])
+                entry_price = position.get('entry_price')
+                quantity = position.get('quantity')
+                
+                if entry_price is None or quantity is None:
+                    continue
+                
+                try:
+                    entry_price = float(entry_price)
+                    quantity = float(quantity)
+                except (ValueError, TypeError):
+                    continue
                 
                 # Calculate current PnL
                 current_value = quantity * current_price
@@ -610,7 +693,7 @@ class ExecutionManager:
                     result = await self._execute_sell(
                         strategy_id, signal, current_price,
                         available_cash, open_positions, 0.02,  # Use average volatility
-                        datetime.now()
+                        datetime.now(timezone.utc)  # Use UTC-aware datetime
                     )
                     
                     if result.get('status') == 'executed':
@@ -633,8 +716,8 @@ class ExecutionManager:
         """Get performance summary for a strategy."""
         summary = {
             'consecutive_losses': self.consecutive_losses.get(strategy_id, 0),
-            'daily_pnl': self.daily_pnl.get(strategy_id, {'pnl': 0.0, 'date': datetime.now().date().isoformat()})['pnl'],
-            'daily_trades': self.daily_trades.get(strategy_id, {'count': 0, 'date': datetime.now().date().isoformat()})['count']
+            'daily_pnl': self.daily_pnl.get(strategy_id, {'pnl': 0.0, 'date': datetime.now(timezone.utc).date().isoformat()})['pnl'],
+            'daily_trades': self.daily_trades.get(strategy_id, {'count': 0, 'date': datetime.now(timezone.utc).date().isoformat()})['count']
         }
         
         # Add database stats if available
