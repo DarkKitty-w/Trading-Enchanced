@@ -41,7 +41,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
         # Calculate Realized PnL from closed positions
         realized_pnl = 0
         for metric in data.get('metrics', []):
-            if 'total_pnl' in metric and metric['total_pnl']:
+            if 'total_pnl' in metric and metric['total_pnl'] is not None:
                 realized_pnl += metric['total_pnl']
         
         pnl_class = "positive" if realized_pnl >= 0 else "negative"
@@ -56,7 +56,14 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
         # Calculate Win Rate
         winning_trades = [t for t in data.get('trades', []) if t.get('side') == 'SELL']
         total_closed = len(winning_trades)
-        win_rate = (len([t for t in winning_trades if t.get('profit', 0) > 0]) / total_closed * 100) if total_closed > 0 else 0
+        win_rate = 0
+        if total_closed > 0:
+            profitable_trades = 0
+            for t in winning_trades:
+                profit = t.get('profit')
+                if profit is not None and profit > 0:
+                    profitable_trades += 1
+            win_rate = (profitable_trades / total_closed * 100)
         
         st.markdown(f"""
         <div class="metric-card">
@@ -157,16 +164,26 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
             
             # Add profit/loss coloring
             def color_profit(val):
-                if val > 0:
-                    return 'color: #10b981'
-                elif val < 0:
-                    return 'color: #ef4444'
+                if val is None:
+                    return ''
+                try:
+                    val_float = float(val)
+                    if val_float > 0:
+                        return 'color: #10b981'
+                    elif val_float < 0:
+                        return 'color: #ef4444'
+                except (ValueError, TypeError):
+                    return ''
                 return ''
             
             # Display trades
             display_cols = ['executed_at', 'symbol', 'side', 'quantity', 'price', 'fees']
             if 'profit' in df_trades.columns:
                 display_cols.append('profit')
+            
+            # Handle profit column if it exists
+            if 'profit' in df_trades.columns:
+                df_trades['profit'] = pd.to_numeric(df_trades['profit'], errors='coerce')
             
             st.dataframe(
                 df_trades[display_cols].sort_values('executed_at', ascending=False).style.format({
@@ -292,10 +309,14 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                     else:
                         st.metric("Sharpe Ratio", "N/A")
                 with metrics_col3:
-                    winning_days = len([r for r in daily_returns if r > 0]) if 'daily_returns' in locals() else 0
-                    total_days = len(daily_returns) if 'daily_returns' in locals() else 0
-                    win_rate = (winning_days / total_days * 100) if total_days > 0 else 0
-                    st.metric("Win Rate (Days)", f"{win_rate:.1f}%")
+                    if len(df_history) > 1:
+                        daily_returns = df_history['total_equity'].pct_change().dropna()
+                        winning_days = len([r for r in daily_returns if r > 0])
+                        total_days = len(daily_returns)
+                        win_rate = (winning_days / total_days * 100) if total_days > 0 else 0
+                        st.metric("Win Rate (Days)", f"{win_rate:.1f}%")
+                    else:
+                        st.metric("Win Rate (Days)", "N/A")
         else:
             st.info("No performance history available.")
     
@@ -584,7 +605,7 @@ def calculate_portfolio_metrics(strategies_data: Dict[str, Dict]) -> Dict:
         
         # Sum PnL from metrics
         for metric in data.get('metrics', []):
-            if 'total_pnl' in metric:
+            if 'total_pnl' in metric and metric['total_pnl'] is not None:
                 total_pnl += metric['total_pnl']
     
     return {
