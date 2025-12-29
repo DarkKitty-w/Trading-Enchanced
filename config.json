@@ -121,7 +121,7 @@
             "MA_Momentum_Hybrid",
             "Volatility_Regime_Adaptive"
         ],
-        "parameters": {
+                "parameters": {
             "MeanReversion": {
                 "period": 41,
                 "deviation_threshold": 0.005229991762602315,
@@ -156,18 +156,18 @@
                 "sell_threshold": 1.004646688973456
             },
             "MA_Momentum_Hybrid": {
-                "short_window": 22,
-                "long_window": 69,
-                "momentum_period": 9,
-                "momentum_threshold": 0.006245846145279945,
-                "confirmation_candles": 2
+                "short_window": 10,
+                "long_window": 31,
+                "momentum_period": 8,
+                "momentum_threshold": 0.005817685230729854,
+                "confirmation_candles": 1
             },
             "Volatility_Regime_Adaptive": {
-                "lookback": 50,
-                "vol_threshold": 0.00634495133725267,
-                "regime_low_entry_pct": 0.008895912656251365,
-                "regime_high_entry_pct": 0.02549443838668007,
-                "ma_period": 78,
+                "lookback": 85,
+                "vol_threshold": 0.023796433221479965,
+                "regime_low_entry_pct": 0.012647658669201738,
+                "regime_high_entry_pct": 0.050521802986685495,
+                "ma_period": 61,
                 "confirmation_candles": 1
             }
         },
@@ -179,7 +179,7 @@
                     "min_volatility_filter": 0.0037050564118808666
                 },
                 "score": 74.11716918581112,
-                "optimized_at": "2025-12-28T13:46:41.679324",
+                "optimized_at": "2025-12-29T19:12:23.177533",
                 "score_components": {
                     "total": 74.11716918581112,
                     "rating": "GOOD"
@@ -195,7 +195,7 @@
                     "volatility_period": 40
                 },
                 "score": 61.49086748248182,
-                "optimized_at": "2025-12-29T15:40:25.290628",
+                "optimized_at": "2025-12-29T19:16:36.441343",
                 "score_components": {
                     "total": 61.49086748248182,
                     "rating": "GOOD"
@@ -209,7 +209,7 @@
                     "confirmation_period": 2
                 },
                 "score": 74.35339664247111,
-                "optimized_at": "2025-12-29T15:49:00.705766",
+                "optimized_at": "2025-12-29T19:28:02.782392",
                 "score_components": {
                     "total": 74.35339664247111,
                     "rating": "GOOD"
@@ -227,7 +227,7 @@
                     "min_volatility_filter": 0.03464704583099741
                 },
                 "score": -999.0,
-                "optimized_at": "2025-12-28T15:09:42.426096",
+                "optimized_at": "2025-12-29T19:38:38.474262",
                 "score_components": {
                     "total": -999.0,
                     "rating": "POOR"
@@ -235,33 +235,33 @@
             },
             "MA_Momentum_Hybrid": {
                 "parameters": {
-                    "short_window": 22,
-                    "long_window": 69,
-                    "momentum_period": 9,
-                    "momentum_threshold": 0.006245846145279945,
-                    "confirmation_candles": 2
+                    "short_window": 10,
+                    "long_window": 31,
+                    "momentum_period": 8,
+                    "momentum_threshold": 0.005817685230729854,
+                    "confirmation_candles": 1
                 },
-                "score": 48.92250390124338,
-                "optimized_at": "2025-12-28T11:55:42.298565",
+                "score": 61.17144853089668,
+                "optimized_at": "2025-12-29T19:41:20.635094",
                 "score_components": {
-                    "total": 48.92250390124338,
-                    "rating": "FAIR"
+                    "total": 61.17144853089668,
+                    "rating": "GOOD"
                 }
             },
             "Volatility_Regime_Adaptive": {
                 "parameters": {
-                    "lookback": 50,
-                    "vol_threshold": 0.00634495133725267,
-                    "regime_low_entry_pct": 0.008895912656251365,
-                    "regime_high_entry_pct": 0.02549443838668007,
-                    "ma_period": 78,
+                    "lookback": 85,
+                    "vol_threshold": 0.023796433221479965,
+                    "regime_low_entry_pct": 0.012647658669201738,
+                    "regime_high_entry_pct": 0.050521802986685495,
+                    "ma_period": 61,
                     "confirmation_candles": 1
                 },
-                "score": 39.98938136311976,
-                "optimized_at": "2025-12-28T10:12:56.819963",
+                "score": 71.41118605731582,
+                "optimized_at": "2025-12-29T19:45:23.057864",
                 "score_components": {
-                    "total": 39.98938136311976,
-                    "rating": "WEAK"
+                    "total": 71.41118605731582,
+                    "rating": "GOOD"
                 }
             }
         },
@@ -306,4 +306,5 @@
         "update_interval_minutes": 5,
         "save_to_database": true
     }
+
 }
