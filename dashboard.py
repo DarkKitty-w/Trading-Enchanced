@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from core.database import Database
 import numpy as np
@@ -152,7 +152,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                     showlegend=True,
                     height=250
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"pie_{strategy_id}")
     
     # TAB 2: TRADES
     with tab_trades:
@@ -185,6 +185,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
             if 'profit' in df_trades.columns:
                 df_trades['profit'] = pd.to_numeric(df_trades['profit'], errors='coerce')
             
+            # Replace applymap with map for newer pandas versions
             st.dataframe(
                 df_trades[display_cols].sort_values('executed_at', ascending=False).style.format({
                     'quantity': '{:.6f}',
@@ -192,7 +193,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                     'fees': '${:.2f}',
                     'profit': '${:+,.2f}' if 'profit' in df_trades.columns else '${:.2f}',
                     'executed_at': lambda t: t.strftime('%Y-%m-%d %H:%M')
-                }).applymap(color_profit, subset=['profit'] if 'profit' in df_trades.columns else []),
+                }).map(color_profit, subset=['profit'] if 'profit' in df_trades.columns else []),
                 use_container_width=True,
                 height=400
             )
@@ -235,7 +236,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                     xaxis_title="Date",
                     yaxis_title="Price ($)"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"timeline_{strategy_id}")
         else:
             st.info("No trade history available.")
     
@@ -279,7 +280,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                 yaxis_title="Equity ($)",
                 hovermode='x unified'
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"equity_{strategy_id}")
             
             # Performance metrics table
             st.subheader("Performance Metrics")
@@ -369,7 +370,7 @@ def display_strategy_data(strategy_id: str, strategy_name: str, data: Dict):
                 font=dict(color='#94a3b8'),
                 height=250
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"gauge_{strategy_id}")
 
 
 # --- 1. CONFIGURATION & SETUP ---
@@ -489,9 +490,9 @@ time_range = st.sidebar.selectbox(
 if time_range == "Custom":
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        start_date = st.date_input("Start Date", datetime.now() - timedelta(days=7))
+        start_date = st.date_input("Start Date", datetime.now(timezone.utc) - timedelta(days=7))
     with col2:
-        end_date = st.date_input("End Date", datetime.now())
+        end_date = st.date_input("End Date", datetime.now(timezone.utc))
 
 # Strategy selection
 st.sidebar.markdown("---")
@@ -624,7 +625,7 @@ with col1:
 with col2:
     st.title("PHOENIX TRADING DASHBOARD")
 with col3:
-    current_time = datetime.utcnow()
+    current_time = datetime.now(timezone.utc)
     st.markdown(f"<div style='text-align: right; color: #94a3b8; margin-top: 20px;'>{current_time.strftime('%Y-%m-%d %H:%M:%S UTC')}</div>", unsafe_allow_html=True)
 
 # Auto-refresh logic
@@ -724,7 +725,7 @@ if show_portfolio and len(selected_strategies) > 1:
                     plot_bgcolor='rgba(0,0,0,0)',
                     font=dict(color='#94a3b8')
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"returns_{hash(str(strategy_options))}")
             
             with col2:
                 fig = px.scatter(df_comparison, x='Trades', y='Return %',
@@ -736,7 +737,7 @@ if show_portfolio and len(selected_strategies) > 1:
                     plot_bgcolor='rgba(0,0,0,0)',
                     font=dict(color='#94a3b8')
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"scatter_{hash(str(strategy_options))}")
         
         # Individual strategy tabs
         st.subheader("📋 Individual Strategy Details")
@@ -771,7 +772,7 @@ st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #64748b; font-size: 0.9em;'>"
     "🚀 Phoenix Trading System • v1.0 • "
-    f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    f"Last Updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
     "</div>",
     unsafe_allow_html=True
 )
