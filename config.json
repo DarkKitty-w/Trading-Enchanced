@@ -1,7 +1,7 @@
 {
     "system": {
         "log_level": "INFO",
-        "max_runtime_minutes": 350,
+        "max_runtime_minutes": 340,
         "output_dir": "portfolio_logs_phoenix",
         "retry_on_error_attempts": 3,
         "api_timeout_seconds": 10,
@@ -308,3 +308,4 @@
     }
 
 }
+
