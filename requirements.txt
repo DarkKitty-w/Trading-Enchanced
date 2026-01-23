@@ -10,5 +10,6 @@ plotly
 seaborn
 matplotlib
 optuna
-streamlit
-altair<5
+streamlit>=1.35
+altair>=6
+
