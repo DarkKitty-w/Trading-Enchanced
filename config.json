@@ -28,7 +28,7 @@
         ],
         "quote_currency": "USDT",
         "timeframe": "15m",
-        "max_open_positions": 5,
+        "max_open_positions": 10,
         "blacklist_coins": [
             "USDC/USD",
             "FDUSD/USD"
